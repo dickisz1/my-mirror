@@ -1,59 +1,74 @@
-export default async function handler(req, res) {
-  const SCRAPELESS_API_KEY = "你的_API_KEY"; // 在 scrapeless.com 获取
-  const targetUrl = `https://manwa.me${req.url}`;
+export const config = {
+  runtime: 'edge', // 切换到边缘运行环境，穿透力更强
+};
 
-  // 1. 设置 Scrapeless 浏览器参数
-  const payload = {
-    browser: "chrome",
-    url: targetUrl,
-    proxy: "", // 如果你有私域代理可以加上
-    wait_for: "networkidle2", // 等待页面加载完成
-    antidetect: true, // 开启防检测，这是跳过验证的关键
-    headers: req.headers
-  };
+export default async function handler(req) {
+  const targetHost = "manwa.me";
+  const url = new URL(req.url);
+  const myHost = url.host;
+  const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
+
+  // 1. 全量克隆 Header，确保浏览器指纹一致
+  const newHeaders = new Headers();
+  req.headers.forEach((value, key) => {
+    if (key.toLowerCase() !== 'host') {
+      newHeaders.set(key, value.replace(new RegExp(myHost, 'g'), targetHost));
+    }
+  });
 
   try {
-    const response = await fetch("https://api.scrapeless.com/v1/browser/fetch", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": SCRAPELESS_API_KEY
-      },
-      body: JSON.stringify(payload)
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: newHeaders,
+      redirect: 'manual'
     });
 
-    const result = await response.json();
+    // 2. 构造响应头
+    const resHeaders = new Headers(response.headers);
+    const setCookies = response.headers.getSetCookie();
     
-    // 2. 捕获 Scrapeless 返回的通关 Cookie
-    if (result.cookies) {
-      result.cookies.forEach(c => {
-        res.appendHeader('Set-Cookie', `${c.name}=${c.value}; Path=/; SameSite=Lax`);
-      });
-    }
+    // 清理 Set-Cookie 的 Domain 限制
+    resHeaders.delete('set-cookie');
+    setCookies.forEach(cookie => {
+      const cleanCookie = cookie
+        .replace(/Domain=[^;]+;?/gi, "")
+        .replace(/Path=[^;]+;?/gi, "Path=/;")
+        .replace(new RegExp(targetHost, 'g'), myHost);
+      resHeaders.append('Set-Cookie', cleanCookie);
+    });
 
-    // 3. 注入通知脚本
-    if (result.content && result.content.includes('text/html')) {
-      let html = result.content;
+    // 3. 处理 HTML 注入通知
+    if (resHeaders.get('content-type')?.includes('text/html')) {
+      let text = await response.text();
       
       const notifyScript = `
       <script>
         (function() {
           if (Notification.permission === 'default') Notification.requestPermission();
-          // 如果 Scrapeless 已经帮我们拿到了令牌
-          if (document.cookie.includes('cf_clearance')) {
-             new Notification("🎉 浏览器已代你完成验证！", { body: "正在进入漫蛙首页..." });
-             setTimeout(() => { location.href = '/'; }, 1500);
-          }
+          setInterval(() => {
+            if (document.cookie.includes('cf_clearance') && !window.notified) {
+              new Notification("✅ 漫蛙验证通关", { body: "秘钥已同步，正在为您跳转..." });
+              window.notified = true;
+              setTimeout(() => { location.href = '/'; }, 1000);
+            }
+          }, 1500);
         })();
       </script>`;
-      
-      html = html.replace('</head>', `${notifyScript}</head>`);
-      return res.status(200).send(html.split("manwa.me").join(req.headers.host));
+
+      text = text.replace('</head>', `${notifyScript}</head>`);
+      return new Response(text.split(targetHost).join(myHost), {
+        status: response.status,
+        headers: resHeaders
+      });
     }
 
-    return res.status(200).send(result.content);
+    // 4. 非 HTML 资源直接返回
+    return new Response(response.body, {
+      status: response.status,
+      headers: resHeaders
+    });
 
   } catch (err) {
-    return res.status(502).send("Scrapeless 连接失败: " + err.message);
+    return new Response("Edge Proxy Error: " + err.message, { status: 502 });
   }
 }
