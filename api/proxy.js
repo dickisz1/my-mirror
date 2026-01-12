@@ -9,6 +9,7 @@ export default async function handler(req, res) {
     "p0.manwa.me",
     "img.manwa.me",
     "cdn.manwa.me"
+    "challenges.cloudflare.com" // 强制代理验证码脚本，确保国内直连能过验证
   ];
 
   let targetUrl;
