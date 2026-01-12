@@ -1,12 +1,5 @@
 {
   "rewrites": [
-    {
-      "source": "/proxy-asset/:path*",
-      "destination": "/api/proxy"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/api/proxy"
-    }
+    { "source": "/(.*)", "destination": "/api/proxy" }
   ]
 }
