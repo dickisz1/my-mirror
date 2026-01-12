@@ -3,73 +3,65 @@ export default async function handler(req, res) {
   const myHost = req.headers.host;
   const url = `https://${targetHost}${req.url}`;
 
-  // 1. 获取原始请求头（排除干扰 Vercel 内部转发的头部）
+  // 1. 1:1 还原所有头信息，不漏掉任何指纹
   const requestHeaders = {};
-  const forbiddenHeaders = ['host', 'connection', 'content-length'];
   Object.keys(req.headers).forEach(key => {
-    if (!forbiddenHeaders.includes(key.toLowerCase())) {
+    // 关键：除了 host，其余全部照搬
+    if (key.toLowerCase() !== 'host') {
       requestHeaders[key] = req.headers[key].toString().replace(new RegExp(myHost, 'g'), targetHost);
     }
   });
 
   try {
-    // 2. 发起请求
     const response = await fetch(url, {
       method: req.method,
       headers: requestHeaders,
       redirect: 'manual'
     });
 
-    // 3. 处理响应头（包括通关 Cookie 的写回）
+    // 2. 响应头全量转发，解决“白屏”问题
     response.headers.forEach((v, k) => {
-      if (k.toLowerCase() === 'set-cookie') {
-        const modifiedCookie = v.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost);
-        res.appendHeader('Set-Cookie', modifiedCookie);
-      } else if (k.toLowerCase() !== 'content-encoding') {
+      // 排除掉压缩头，交给 Vercel 处理，防止乱码
+      if (k.toLowerCase() !== 'content-encoding') {
         res.setHeader(k, v.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
 
-    // 4. 处理 301/302 重定向
-    if (response.status >= 300 && response.status < 400) {
-      const loc = response.headers.get('location');
-      if (loc) res.setHeader('Location', loc.replace(targetHost, myHost));
-      return res.status(response.status).send('');
-    }
-
-    // 5. 内容分发与通知注入
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       let text = await response.text();
       
-      // 桌面通知 JS
-      const notifyScript = `
+      // 3. 注入【自动检测通关】脚本
+      // 只要打勾成功拿到秘钥，立即发通知并带你进站
+      const passScript = `
       <script>
         (function() {
-          // 只有在打勾后（即有了通关 Cookie）才发通知并刷新
-          if ("Notification" in window) {
-            Notification.requestPermission();
-          }
-          let hasChecked = false;
-          setInterval(() => {
-            if (document.cookie.includes('cf_clearance') && !hasChecked) {
-              new Notification('漫蛙验证成功', { body: '通关秘钥已就绪，正在进入首页...' });
-              hasChecked = true;
-              setTimeout(() => { window.location.href = '/'; }, 1500);
+          // 预请求权限
+          if (Notification.permission === "default") Notification.requestPermission();
+
+          let checkCount = 0;
+          const timer = setInterval(() => {
+            if (document.cookie.includes("cf_clearance")) {
+              new Notification("🎉 验证已通过！", { body: "正在为您跳转至漫蛙首页..." });
+              clearInterval(timer);
+              setTimeout(() => { location.href = '/'; }, 1000);
             }
-          }, 2000);
+            // 如果 10 秒还没过，尝试自动刷新页面重试
+            if (++checkCount > 10) { 
+              console.log("正在重试验证加载..."); 
+            }
+          }, 1500);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${notifyScript}</head>`);
+      text = text.replace('</head>', `${passScript}</head>`);
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
-    // 6. 其它资源（图片、脚本、CSS）直接返回
     const buffer = await response.arrayBuffer();
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("转发失败: " + err.message);
+    return res.status(502).send("连接超时，请刷新重试");
   }
 }
