@@ -11,21 +11,35 @@ export default async function handler(req, res) {
   ];
   
   headersToCopy.forEach(h => {
-    if (req.headers[h]) requestHeaders[h] = req.headers[h].replace(myHost, targetHost);
+    if (req.headers[h]) {
+      // 请求时把你的域名换回漫蛙域名，骗过防火墙
+      requestHeaders[h] = req.headers[h].split(myHost).join(targetHost);
+    }
   });
 
   try {
     const response = await fetch(url, {
       method: req.method,
       headers: requestHeaders,
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? await req.body : undefined,
+      // 注意：Vercel 环境下 body 处理需要小心，通常 GET 请求不传 body
+      body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(req.body) : undefined,
       redirect: 'manual'
     });
 
-    // 2. 拿到漫蛙的所有响应头，原封不动地传回给你
+    // 2. 响应头处理：【通关秘钥补丁就在这里】
     response.headers.forEach((value, key) => {
-      // 排除掉可能导致死循环的压缩头
-      if (key !== 'content-encoding') {
+      const lowerKey = key.toLowerCase();
+      // 排除压缩头防止白屏
+      if (lowerKey === 'content-encoding') return;
+
+      if (lowerKey === 'set-cookie') {
+        // 核心修改：移除 Domain 属性，并把漫蛙域名替换成你的域名
+        // 这样浏览器才会把“通关秘钥”存入 dickisz123.dpdns.org
+        const modifiedCookie = value
+          .replace(/Domain=[^;]+;?/gi, "") 
+          .replace(new RegExp(targetHost, 'g'), myHost);
+        res.appendHeader('Set-Cookie', modifiedCookie);
+      } else {
         res.setHeader(key, value.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
@@ -37,15 +51,15 @@ export default async function handler(req, res) {
       return res.status(response.status).send('');
     }
 
-    // 4. 内容处理：如果是网页，只做最基础的域名替换
+    // 4. 内容处理
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       let text = await response.text();
-      // 关键：把页面上所有的 manwa.me 变成你的域名，让接下来的请求还能回到 Vercel
+      // 全局域名替换，确保页面资源请求全部回到我们的代理
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
-    // 5. 其他所有东西（图片、脚本、验证码零件）全部原样转发
+    // 5. 其他所有资源原样转发
     const buffer = await response.arrayBuffer();
     return res.status(response.status).send(Buffer.from(buffer));
 
