@@ -1,58 +1,51 @@
 export default async function handler(req, res) {
   const targetHost = "manwa.me";
   const myHost = req.headers.host;
-  
-  // 1. 构造请求地址，排除 /proxy-asset/ 的干扰
-  const path = req.url.replace('/proxy-asset/manwa.me', '');
-  const targetUrl = `https://${targetHost}${path}`;
+  const targetUrl = `https://${targetHost}${req.url}`;
 
   try {
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: {
-        // 伪装成最新的 iPhone 浏览器，这是 Cloudflare 最不容易拦截的身份
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-        "Cookie": req.headers["cookie"] || "",
-        "Referer": `https://${targetHost}/`
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": `https://${targetHost}/`,
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none", // 伪装成直接输入网址访问
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Cookie": req.headers["cookie"] || ""
       },
       redirect: "manual"
     });
 
-    // 2. 这里的重点：原封不动把漫蛙的验证 Cookie 转交给你的浏览器
+    // 如果还是返回 403，说明 IP 真的被卡死了
+    if (response.status === 403) {
+      return res.status(403).send("漫蛙服务器拒绝了 Vercel 的访问。建议等待一小时后更换路径重试，或检查漫蛙主站是否开启了极高强度的盾。");
+    }
+
+    // 处理 Set-Cookie，确保通关令牌能存下
     const setCookies = response.headers.getSetCookie();
-    if (setCookies && setCookies.length > 0) {
-      // 抹掉 Domain，让浏览器强行存下这个 Cookie
-      res.setHeader("Set-Cookie", setCookies.map(c => c.replace(/Domain=[^;]+;?/gi, "")));
+    if (setCookies.length > 0) {
+      res.setHeader("Set-Cookie", setCookies.map(c => c.replace(/manwa\.me/g, myHost).replace(/Domain=[^;]+;?/gi, "")));
     }
 
-    // 3. 把漫蛙所有的响应头都带回来，但去掉可能导致白屏的 CSP
-    response.headers.forEach((v, k) => {
-      if (!['content-security-policy', 'content-length', 'transfer-encoding'].includes(k.toLowerCase())) {
-        res.setHeader(k, v.replace(new RegExp(targetHost, 'g'), myHost));
-      }
-    });
-
-    // 4. 处理跳转
-    if (response.status >= 300 && response.status < 400) {
-      const loc = response.headers.get("location");
-      if (loc) res.setHeader("Location", loc.replace(targetHost, myHost));
-      return res.status(response.status).send("");
-    }
-
-    // 5. 内容替换：只换域名，不改脚本
+    // 网页内容替换
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("text/html")) {
       let text = await response.text();
-      // 让页面里的链接都走你的域名
+      res.setHeader("Content-Type", contentType);
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
+    // 转发资源
     const buffer = await response.arrayBuffer();
+    res.setHeader("Content-Type", contentType);
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (e) {
-    return res.status(200).send("脚本搬运时卡住了: " + e.message);
+    return res.status(502).send("连接异常: " + e.message);
   }
 }
