@@ -18,15 +18,17 @@ export default async function handler(req, res) {
       redirect: 'manual'
     });
 
-    // 1. 响应头处理：【通关令牌强行修正】
+    // 1. 响应头全量处理：修复图标加载与秘钥存储
     response.headers.forEach((value, key) => {
-      if (key.toLowerCase() === 'content-encoding') return;
+      const lowerKey = key.toLowerCase();
+      if (lowerKey === 'content-encoding') return;
       
-      if (key.toLowerCase() === 'set-cookie') {
-        // 关键：把令牌里的 Domain 去掉，并把 Path 设为根目录，确保全局有效
+      if (lowerKey === 'set-cookie') {
+        // 关键：确保 cf_clearance 被浏览器接受
         const modifiedCookie = value
           .replace(/Domain=[^;]+;?/gi, "") 
           .replace(/Path=[^;]+;?/gi, "Path=/;")
+          .replace(/Secure/gi, "") // 临时移除 Secure 以便在某些非全 HTTPS 环境调试
           .replace(new RegExp(targetHost, 'g'), myHost);
         res.appendHeader('Set-Cookie', modifiedCookie);
       } else {
@@ -44,22 +46,37 @@ export default async function handler(req, res) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
       
-      // 2. 注入“打勾成功”桌面通知脚本
+      // 2. 注入“通关监控”脚本：如果桌面通知不亮，就用网页弹窗
       const finalScript = `
       <script>
         (function() {
+          console.log("监控启动：等待通关秘钥...");
+          
+          function notifyUser(msg) {
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(msg);
+            } else {
+              console.log("【通关状态】: " + msg);
+              // 如果通知权限没开，直接在页面顶部显示一个绿条
+              let div = document.createElement('div');
+              div.style = "position:fixed;top:0;left:0;width:100%;background:green;color:white;text-align:center;z-index:99999;padding:10px;";
+              div.innerText = msg;
+              document.body.appendChild(div);
+            }
+          }
+
+          let checkToken = setInterval(() => {
+            if (document.cookie.includes("cf_clearance")) {
+              notifyUser("🎉 通关令牌已到手！正在进入漫蛙...");
+              clearInterval(checkToken);
+              setTimeout(() => { window.location.reload(); }, 1000);
+            }
+          }, 1500);
+
+          // 询问通知权限
           if ("Notification" in window && Notification.permission === "default") {
             Notification.requestPermission();
           }
-          // 监控秘钥是否生成
-          let checkToken = setInterval(() => {
-            if (document.cookie.includes("cf_clearance")) {
-              new Notification("通关令牌已就绪！", { body: "正在带您进入漫蛙首页，请稍候..." });
-              clearInterval(checkToken);
-              // 令牌到手，立即尝试跳转
-              setTimeout(() => { window.location.href = window.location.origin; }, 1500);
-            }
-          }, 1000);
         })();
       </script>`;
 
@@ -71,6 +88,6 @@ export default async function handler(req, res) {
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("打勾后续处理异常: " + err.message);
+    return res.status(502).send("秘钥同步中断: " + err.message);
   }
 }
