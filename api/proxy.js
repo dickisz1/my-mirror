@@ -3,35 +3,31 @@ export default async function handler(req, res) {
   const myHost = req.headers.host;
   const url = `https://${targetHost}${req.url}`;
 
-  // 1. 搬运浏览器原始头信息，确保“勾选”动作合法
+  // 1. 照搬浏览器头信息
   const requestHeaders = {};
-  const headersToCopy = ['user-agent', 'accept', 'accept-language', 'cookie', 'referer', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];
+  const headersToCopy = [
+    'user-agent', 'accept', 'accept-language', 'cookie', 
+    'referer', 'priority', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'
+  ];
+  
   headersToCopy.forEach(h => {
     if (req.headers[h]) requestHeaders[h] = req.headers[h].split(myHost).join(targetHost);
   });
 
   try {
-    // 【核心关卡】验证零件直通模式：遇到 cdn-cgi 不做任何处理，直接搬运，保证框一定能出
-    if (req.url.includes('cdn-cgi/')) {
-      const cfRes = await fetch(url, { method: req.method, headers: requestHeaders });
-      const cfData = await cfRes.arrayBuffer();
-      res.setHeader("Content-Type", cfRes.headers.get("content-type"));
-      return res.status(cfRes.status).send(Buffer.from(cfData));
-    }
-
     const response = await fetch(url, {
       method: req.method,
       headers: requestHeaders,
-      body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(req.body) : undefined,
+      body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
       redirect: 'manual'
     });
 
-    // 2. 响应头同步：修改 Set-Cookie 的域名，让浏览器存下通关秘钥
+    // 2. 响应头处理：修复图标和秘钥存储
     response.headers.forEach((value, key) => {
-      const lowerKey = key.toLowerCase();
-      if (lowerKey === 'content-encoding') return;
-      if (lowerKey === 'set-cookie') {
-        // 抹掉 Domain 限制，解决浏览器拒收通关令牌的问题
+      if (key.toLowerCase() === 'content-encoding') return;
+      
+      // 特别处理 Set-Cookie，否则令牌存不下，图标也会因为跨域拒收
+      if (key.toLowerCase() === 'set-cookie') {
         const modifiedCookie = value.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost);
         res.appendHeader('Set-Cookie', modifiedCookie);
       } else {
@@ -46,43 +42,41 @@ export default async function handler(req, res) {
       return res.status(response.status).send('');
     }
 
+    // 4. 内容处理：注入通知并防止脚本崩溃
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       let text = await response.text();
       
-      // 【新增功能】桌面通知 JS 注入
-      const notifyJS = `
+      // 注入通知脚本：图标出来、打勾、通关都会发消息
+      const injectScript = `
       <script>
         (function() {
-          if ("Notification" in window) {
+          if ("Notification" in window && Notification.permission !== "granted") {
             Notification.requestPermission();
           }
-          // 监控验证状态并通知
-          let notified = false;
           setInterval(() => {
-            const hasToken = document.cookie.includes("cf_clearance");
-            const hasBox = document.querySelector('iframe') || document.querySelector('#cf-turnstile-wait');
-            
-            if (hasBox && !notified) {
-              new Notification("验证框已就绪", { body: "请点击确认您是真人进行打勾操作。" });
-              notified = true;
+            if (document.querySelector('iframe')) {
+              if (!window.notifiedBox) {
+                new Notification("验证框已就绪", { body: "图标已加载，请点击打勾。" });
+                window.notifiedBox = true;
+              }
             }
-            if (hasToken) {
-              new Notification("通关成功！", { body: "正在为您跳转至漫蛙首页..." });
-              setTimeout(() => { location.reload(); }, 2000);
+            if (document.cookie.includes("cf_clearance")) {
+              new Notification("通关成功", { body: "秘钥已同步，正在进入首页。" });
             }
           }, 2000);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${notifyJS}</head>`);
+      text = text.replace('</head>', `${injectScript}</head>`);
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
+    // 5. 其他资源（图标、JS零件）原样转发
     const buffer = await response.arrayBuffer();
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("连接异常，请重试: " + err.message);
+    return res.status(502).send("脚本代连异常: " + err.message);
   }
 }
