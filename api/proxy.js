@@ -3,53 +3,59 @@ export default async function handler(req, res) {
   const myHost = req.headers.host;
   const url = `https://${targetHost}${req.url}`;
 
-  // 1. 极其重要的头信息：直接照搬你的浏览器头
   const requestHeaders = {};
   const headersToCopy = [
     'user-agent', 'accept', 'accept-language', 'cookie', 
-    'referer', 'priority', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'
+    'referer', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'
   ];
   
   headersToCopy.forEach(h => {
-    if (req.headers[h]) requestHeaders[h] = req.headers[h].replace(myHost, targetHost);
+    if (req.headers[h]) {
+      // 关键：请求时把你的域名换回漫蛙域名，否则漫蛙不认
+      requestHeaders[h] = req.headers[h].split(myHost).join(targetHost);
+    }
   });
 
   try {
     const response = await fetch(url, {
       method: req.method,
       headers: requestHeaders,
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? await req.body : undefined,
       redirect: 'manual'
     });
 
-    // 2. 拿到漫蛙的所有响应头，原封不动地传回给你
+    // 1. 深度处理响应头
     response.headers.forEach((value, key) => {
-      // 排除掉可能导致死循环的压缩头
-      if (key !== 'content-encoding') {
+      if (key.toLowerCase() === 'set-cookie') {
+        // 【最关键一步】把漫蛙发回的所有 Cookie 全部强行改写为你的域名
+        // 这样你的浏览器才会乖乖存下“通关令牌”
+        const modifiedCookie = value.replace(/Domain=[^;]+;?/gi, `Domain=${myHost};`)
+                                    .replace(/manwa\.me/g, myHost);
+        res.setHeader('Set-Cookie', modifiedCookie);
+      } else if (key.toLowerCase() !== 'content-encoding' && key.toLowerCase() !== 'content-length') {
         res.setHeader(key, value.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
 
-    // 3. 处理重定向
+    // 2. 处理验证通过后的自动跳转
     if (response.status >= 300 && response.status < 400) {
       const loc = response.headers.get('location');
       if (loc) res.setHeader('Location', loc.replace(targetHost, myHost));
       return res.status(response.status).send('');
     }
 
-    // 4. 内容处理：如果是网页，只做最基础的域名替换
+    // 3. 网页内容替换
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/html')) {
       let text = await response.text();
-      // 关键：把页面上所有的 manwa.me 变成你的域名，让接下来的请求还能回到 Vercel
+      // 移除可能干扰验证跳转的安全策略
+      text = text.replace(/<meta[^>]*content-security-policy[^>]*>/gi, '');
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
-    // 5. 其他所有东西（图片、脚本、验证码零件）全部原样转发
     const buffer = await response.arrayBuffer();
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("脚本代连异常: " + err.message);
+    return res.status(502).send("令牌同步异常: " + err.message);
   }
 }
