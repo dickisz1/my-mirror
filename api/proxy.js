@@ -3,37 +3,41 @@ export default async function handler(req, res) {
   const myHost = req.headers.host;
   const url = `https://${targetHost}${req.url}`;
 
-  // 1. 基础头信息伪装
+  // 1. 构造请求头：强制删除可能导致 403 的追踪头
   const requestHeaders = {};
-  const headersToCopy = ['user-agent', 'accept', 'accept-language', 'cookie', 'referer', 'priority', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];
+  const headersToCopy = ['user-agent', 'accept', 'accept-language', 'cookie', 'referer', 'priority'];
   headersToCopy.forEach(h => {
     if (req.headers[h]) requestHeaders[h] = req.headers[h].split(myHost).join(targetHost);
   });
+  
+  // 强制伪装成直接访问，防止被识别为代理
+  requestHeaders['sec-fetch-site'] = 'none';
+  requestHeaders['sec-fetch-mode'] = 'navigate';
+  requestHeaders['sec-fetch-dest'] = 'document';
 
   try {
-    // 【逻辑 1：验证框优先】如果是验证零件，执行“无损直通”，确保你能顺利打勾
-    if (req.url.includes('cdn-cgi/')) {
-      const cfRes = await fetch(url, { method: req.method, headers: requestHeaders });
+    // 【核心修复】验证脚本路径豁免，必须保证这些文件原封不动
+    if (req.url.includes('cdn-cgi/') || req.url.includes('invisible.js')) {
+      const cfRes = await fetch(url, { headers: requestHeaders });
       const cfData = await cfRes.arrayBuffer();
       res.setHeader("Content-Type", cfRes.headers.get("content-type"));
-      return res.status(cfRes.status).send(Buffer.from(cfData));
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      return res.status(200).send(Buffer.from(cfData));
     }
 
     const response = await fetch(url, {
       method: req.method,
       headers: requestHeaders,
-      body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(req.body) : undefined,
       redirect: 'manual'
     });
 
-    // 【逻辑 2：令牌接收】只有在非 cdn-cgi 请求时，才精准捕获并修正通关秘钥
+    // 2. 捕获通关秘钥：确保打勾后令牌能存入浏览器
     response.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
-      if (lowerKey === 'content-encoding') return;
       if (lowerKey === 'set-cookie') {
         const modifiedCookie = value.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost);
         res.appendHeader('Set-Cookie', modifiedCookie);
-      } else {
+      } else if (lowerKey !== 'content-encoding' && lowerKey !== 'content-security-policy') {
         res.setHeader(key, value.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
@@ -48,36 +52,30 @@ export default async function handler(req, res) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
       
-      // 【逻辑 3：注入桌面通知脚本】
-      const notificationScript = `
+      // 注入桌面通知与脚本激活逻辑
+      const injectScript = `
       <script>
         (function() {
-          if ("Notification" in window) {
-            if (Notification.permission !== "granted") {
-              Notification.requestPermission();
-            }
+          // 请求通知权限
+          if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission();
           }
-          // 监控验证码状态
-          setInterval(() => {
-            const statusText = document.body.innerText;
-            if (statusText.includes("正在验证") || statusText.includes("Checking your browser")) {
-              console.log("正在等待打勾...");
-            } else if (document.cookie.includes("cf_clearance")) {
-              new Notification("漫蛙通关成功！", { body: "秘钥已存入浏览器，正在进入首页...", icon: "/favicon.ico" });
-            }
-          }, 3000);
           
-          window.onload = () => {
-            if (!document.cookie.includes("cf_clearance")) {
-              new Notification("需要验证", { body: "请点击页面上的验证框进行打勾操作。" });
+          // 监控验证码是否加载成功
+          setTimeout(() => {
+            const iframe = document.querySelector('iframe[src*="cloudflare"]');
+            if (!iframe) {
+              console.log("检测到验证框未出现，尝试修复渲染...");
+              // 这里的逻辑是如果没框，尝试给通知提醒用户再次刷新
+              new Notification("验证框加载失败", { body: "请尝试刷新页面或切换网络。" });
+            } else {
+              new Notification("验证框已就绪", { body: "请点击打勾以获取通关秘钥。" });
             }
-          };
+          }, 5000);
         })();
-      </script>
-      `;
+      </script>`;
       
-      // 在 </head> 前插入通知脚本，并替换域名
-      text = text.replace('</head>', `${notificationScript}</head>`);
+      text = text.replace('</head>', `${injectScript}</head>`);
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
@@ -85,6 +83,6 @@ export default async function handler(req, res) {
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("脚本代连异常: " + err.message);
+    return res.status(502).send("连接异常: " + err.message);
   }
 }
