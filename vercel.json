@@ -1,5 +1,5 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/proxy" }
+    { "source": "/(.*)", "destination": "https://manwa.me/$1" }
   ]
 }
