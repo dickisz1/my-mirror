@@ -2,13 +2,12 @@ export default async function handler(req, res) {
   const myHost = req.headers.host;
   let targetUrl;
 
-  // 更加严谨的路径解析
+  // 1. 识别路径：是首页还是搬运资源？
   if (req.url.includes('/proxy-asset/')) {
-    // 提取 /proxy-asset/ 之后的所有内容作为目标地址
-    const actualPath = req.url.split('/proxy-asset/')[1];
-    targetUrl = `https://${actualPath}`;
+    // 提取域名部分。例如从 /proxy-asset/manwa.me/static 提取出 manwa.me/static
+    const rawPath = req.url.split('/proxy-asset/')[1];
+    targetUrl = `https://${rawPath}`;
   } else {
-    // 默认访问漫蛙主站
     targetUrl = `https://manwa.me${req.url}`;
   }
 
@@ -21,25 +20,27 @@ export default async function handler(req, res) {
     });
 
     const contentType = response.headers.get("content-type") || "";
-    
-    // 如果是 HTML 或 JS，执行域名替换
-    if (contentType.includes("text/html") || contentType.includes("application/javascript")) {
+
+    // 如果是 HTML 或 JS，替换内部链接
+    if (contentType.includes("text") || contentType.includes("javascript")) {
       let text = await response.text();
-      // 这里的替换逻辑要涵盖所有漫蛙域名
-      const domains = ["manwa.me", "mwappimgs.cc", "p0.manwa.me", "img.manwa.me"];
+      // 替换逻辑：防止重复替换
+      const domains = ["manwa.me", "mwappimgs.cc", "p0.manwa.me"];
       domains.forEach(dom => {
-        const regex = new RegExp(dom, 'g');
-        text = text.replace(regex, `${myHost}/proxy-asset/${dom}`);
+        const regex = new RegExp(`https?://${dom}`, 'g');
+        text = text.replace(regex, `https://${myHost}/proxy-asset/${dom}`);
       });
       res.setHeader("Content-Type", contentType);
       return res.status(200).send(text);
     }
 
-    // 图片等资源直接转发
-    const buffer = await response.arrayBuffer();
+    // 图片直接发送
+    const arrayBuffer = await response.arrayBuffer();
     res.setHeader("Content-Type", contentType);
-    return res.status(200).send(Buffer.from(buffer));
+    return res.status(200).send(Buffer.from(arrayBuffer));
+
   } catch (e) {
-    return res.status(500).send("搬运失败: " + e.message);
+    // 【关键】这里会把报错信息直接显示在网页上，方便你查错
+    return res.status(500).send(`代购在搬运 ${targetUrl} 时滑倒了: ${e.message}`);
   }
 }
