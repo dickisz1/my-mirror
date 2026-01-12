@@ -4,8 +4,7 @@ export default async function handler(req, res) {
   const url = `https://${targetHost}${req.url}`;
 
   const requestHeaders = {};
-  const headersToCopy = ['user-agent', 'accept', 'accept-language', 'cookie', 'referer', 'priority', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];
-  
+  const headersToCopy = ['user-agent', 'accept', 'accept-language', 'cookie', 'referer', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'];
   headersToCopy.forEach(h => {
     if (req.headers[h]) requestHeaders[h] = req.headers[h].split(myHost).join(targetHost);
   });
@@ -18,21 +17,25 @@ export default async function handler(req, res) {
       redirect: 'manual'
     });
 
-    // 1. 响应头全量处理：修复图标加载与秘钥存储
-    response.headers.forEach((value, key) => {
-      const lowerKey = key.toLowerCase();
-      if (lowerKey === 'content-encoding') return;
-      
-      if (lowerKey === 'set-cookie') {
-        // 关键：确保 cf_clearance 被浏览器接受
-        const modifiedCookie = value
+    // 1. 深度同步所有 Cookie，特别是通关秘钥
+    const setCookies = response.headers.getSetCookie();
+    if (setCookies.length > 0) {
+      setCookies.forEach(cookie => {
+        // 强制抹除 Domain 限制，确保你的浏览器肯收下它
+        const cleanCookie = cookie
           .replace(/Domain=[^;]+;?/gi, "") 
           .replace(/Path=[^;]+;?/gi, "Path=/;")
-          .replace(/Secure/gi, "") // 临时移除 Secure 以便在某些非全 HTTPS 环境调试
-          .replace(new RegExp(targetHost, 'g'), myHost);
-        res.appendHeader('Set-Cookie', modifiedCookie);
-      } else {
-        res.setHeader(key, value.replace(new RegExp(targetHost, 'g'), myHost));
+          .replace(/Secure/gi, "") 
+          .replace(/SameSite=None/gi, "SameSite=Lax")
+          .split(targetHost).join(myHost);
+        res.appendHeader('Set-Cookie', cleanCookie);
+      });
+    }
+
+    // 2. 复制其他响应头
+    response.headers.forEach((v, k) => {
+      if (!['set-cookie', 'content-encoding', 'content-length'].includes(k.toLowerCase())) {
+        res.setHeader(k, v.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
 
@@ -46,41 +49,30 @@ export default async function handler(req, res) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
       
-      // 2. 注入“通关监控”脚本：如果桌面通知不亮，就用网页弹窗
-      const finalScript = `
+      // 3. 注入“状态诊断”绿条/红条
+      const debugScript = `
       <script>
         (function() {
-          console.log("监控启动：等待通关秘钥...");
-          
-          function notifyUser(msg) {
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(msg);
-            } else {
-              console.log("【通关状态】: " + msg);
-              // 如果通知权限没开，直接在页面顶部显示一个绿条
-              let div = document.createElement('div');
-              div.style = "position:fixed;top:0;left:0;width:100%;background:green;color:white;text-align:center;z-index:99999;padding:10px;";
-              div.innerText = msg;
-              document.body.appendChild(div);
-            }
+          function showStatus(msg, color) {
+            let d = document.getElementById('debug-bar') || document.createElement('div');
+            d.id = 'debug-bar';
+            d.style = "position:fixed;top:0;left:0;width:100%;background:"+color+";color:white;text-align:center;z-index:99999;padding:5px;font-size:12px;";
+            d.innerText = msg;
+            if(!d.parentNode) document.body.appendChild(d);
           }
 
-          let checkToken = setInterval(() => {
+          setInterval(() => {
             if (document.cookie.includes("cf_clearance")) {
-              notifyUser("🎉 通关令牌已到手！正在进入漫蛙...");
-              clearInterval(checkToken);
-              setTimeout(() => { window.location.reload(); }, 1000);
+              showStatus("✅ 秘钥已拿到！尝试刷新进入...", "green");
+              setTimeout(() => { location.reload(); }, 2000);
+            } else {
+              showStatus("❌ 还没拿到秘钥，请在上方打勾", "orange");
             }
-          }, 1500);
-
-          // 询问通知权限
-          if ("Notification" in window && Notification.permission === "default") {
-            Notification.requestPermission();
-          }
+          }, 2000);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${finalScript}</head>`);
+      text = text.replace('</body', `${debugScript}</body`);
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
@@ -88,6 +80,6 @@ export default async function handler(req, res) {
     return res.status(response.status).send(Buffer.from(buffer));
 
   } catch (err) {
-    return res.status(502).send("秘钥同步中断: " + err.message);
+    return res.status(502).send("连接错误: " + err.message);
   }
 }
