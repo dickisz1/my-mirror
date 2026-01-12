@@ -1,5 +1,5 @@
 export const config = {
-  runtime: 'edge', 
+  runtime: 'edge',
 };
 
 export default async function handler(req) {
@@ -9,9 +9,9 @@ export default async function handler(req) {
   const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
 
   const newHeaders = new Headers();
-  req.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== 'host') {
-      newHeaders.set(key, value.replace(new RegExp(myHost, 'g'), targetHost));
+  req.headers.forEach((v, k) => {
+    if (k.toLowerCase() !== 'host') {
+      newHeaders.set(k, v.replace(new RegExp(myHost, 'g'), targetHost));
     }
   });
 
@@ -25,68 +25,72 @@ export default async function handler(req) {
     const resHeaders = new Headers(response.headers);
     const setCookies = response.headers.getSetCookie();
     resHeaders.delete('set-cookie');
-    setCookies.forEach(cookie => {
-      resHeaders.append('Set-Cookie', cookie.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost));
-    });
+    setCookies.forEach(c => resHeaders.append('Set-Cookie', c.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost)));
 
     if (resHeaders.get('content-type')?.includes('text/html')) {
       let text = await response.text();
-      
-      // --- 核心净化逻辑开始 ---
-      const cleanScript = `
+
+      // --- 核心样式增强：响应式尺寸 + 广告粉碎 ---
+      const injectCode = `
       <style>
-        /* 1. 屏蔽常见的广告位样式名 */
-        .ads, .ads-wrap, .adv-container, iframe[src*="ads"], 
-        div[id*="pop"], .fixed-ad, .bottom-ad, .floating-ad {
-          display: none !important;
-          visibility: hidden !important;
-          height: 0 !important;
+        /* 1. 漫画图片尺寸自适应：无论浏览器多大，图片始终填满宽度且不失真 */
+        img, .manga-page, .comic-img {
+          max-width: 100% !important;
+          height: auto !important;
+          width: 100% !important;
+          display: block !important;
+          margin: 0 auto !important;
         }
 
-        /* 2. 隐藏强制登录/注册的弹窗或侧边栏 */
-        .login-modal, .register-guide, .login-prompt,
-        .vip-mask, .mask-login {
+        /* 2. 强制隐藏广告与登录提示：
+           这里涵盖了漫蛙常见的：顶部banner、悬浮窗、弹窗、APP下载提示、登录遮罩 */
+        [class*="ads"], [id*="ads"], 
+        .fixed-ad, .ad-item, .pop-window, 
+        .login-guide, .login-mask, .vip-pay-guide,
+        .download-app-bar, .footer-ad, .header-ad,
+        iframe, #ad_root {
           display: none !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
         }
 
-        /* 3. 强制内容区全屏，移除因广告留下的空白 */
-        body { padding-top: 0 !important; padding-bottom: 0 !important; }
+        /* 3. 移除多余的间距，让阅读更沉浸 */
+        html, body { overflow-x: hidden !important; width: 100% !important; padding: 0 !important; margin: 0 !important; }
+        .container, .content-box { width: 100% !important; padding: 0 !important; }
       </style>
+      
       <script>
         (function() {
-          // 定时检测并移除动态生成的广告节点
-          setInterval(() => {
-            // 移除所有可能是广告的 iframe
-            document.querySelectorAll('iframe').forEach(el => {
-              if(!el.src.includes('manwa')) el.remove();
+          // 自动化处理：移除动态加载的广告
+          const clean = () => {
+            // 查找所有包含“登录”、“下载”、“广告”等字眼的按钮并移除
+            document.querySelectorAll('div, a, span').forEach(el => {
+              const txt = el.innerText;
+              if (txt.includes('下载APP') || txt.includes('登录观看') || txt.includes('立即充值')) {
+                el.parentElement.style.display = 'none';
+              }
             });
-            // 自动关闭干扰阅读的登录引导
-            const closeBtn = document.querySelector('.close-login-btn, .btn-close');
-            if(closeBtn) closeBtn.click();
-          }, 2000);
-
-          // 之前的通关通知逻辑
+          };
+          
+          setInterval(clean, 1000);
+          
+          // 之前的通关同步逻辑
           if (Notification.permission === 'default') Notification.requestPermission();
           setInterval(() => {
             if (document.cookie.includes('cf_clearance') && !window.notified) {
-              new Notification("✅ 漫蛙验证通关", { body: "广告已净化，祝阅读愉快！" });
+              new Notification("✅ 漫蛙极净模式已启动", { body: "尺寸自适应已就绪" });
               window.notified = true;
             }
-          }, 1500);
+          }, 2000);
         })();
       </script>`;
-      // --- 核心净化逻辑结束 ---
 
-      text = text.replace('</head>', `${cleanScript}</head>`);
-      return new Response(text.split(targetHost).join(myHost), {
-        status: response.status,
-        headers: resHeaders
-      });
+      text = text.replace('</head>', `${injectCode}</head>`);
+      return new Response(text.split(targetHost).join(myHost), { status: response.status, headers: resHeaders });
     }
 
     return new Response(response.body, { status: response.status, headers: resHeaders });
-
   } catch (err) {
-    return new Response("Edge Proxy Error: " + err.message, { status: 502 });
+    return new Response("Error: " + err.message, { status: 502 });
   }
 }
