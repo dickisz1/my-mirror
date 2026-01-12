@@ -4,25 +4,33 @@ export default async function handler(req, res) {
   const targetUrl = `https://${targetHost}${req.url}`;
 
   try {
+    // 1. 构造发给漫蛙的请求（带上你的原始 Cookie）
     const response = await fetch(targetUrl, {
+      method: req.method,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": req.headers["user-agent"],
         "Referer": `https://${targetHost}/`,
-        "Accept-Language": "zh-CN,zh;q=0.9"
+        "Cookie": req.headers["cookie"] || "", // 透传你的身份证给漫蛙
+        "Accept": req.headers["accept"],
+        "Accept-Language": "zh-CN,zh;q=0.9",
       },
       redirect: "manual"
     });
 
-    // 1. 获取原始响应头
-    const newHeaders = new Headers(response.headers);
+    // 2. 准备把漫蛙的响应发回给你
+    const responseHeaders = new Headers(response.headers);
     
-    // 【核心修复】删除所有会阻止验证脚本运行的安全策略
-    newHeaders.delete("content-security-policy");
-    newHeaders.delete("content-security-policy-report-only");
-    newHeaders.delete("x-frame-options");
-    newHeaders.delete("clear-site-data");
+    // 【核心修复】强行把漫蛙发的“身份证”(Set-Cookie) 传回给你的浏览器
+    const setCookie = response.headers.get("set-cookie");
+    if (setCookie) {
+      res.setHeader("Set-Cookie", setCookie.replace(new RegExp(targetHost, 'g'), myHost));
+    }
 
-    // 2. 处理重定向
+    // 屏蔽安全路障，允许验证脚本运行
+    res.setHeader("Content-Security-Policy", "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    // 3. 处理重定向
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") || "";
       res.setHeader("Location", location.replace(targetHost, myHost));
@@ -31,26 +39,23 @@ export default async function handler(req, res) {
 
     const contentType = response.headers.get("content-type") || "";
 
-    // 3. 处理网页内容替换
+    // 4. 处理网页内容替换
     if (contentType.includes("text/html") || contentType.includes("application/javascript")) {
       let text = await response.text();
-      // 把所有漫蛙域名全换成你自己的，确保后续请求不掉队
+      // 全量域名替换，确保页面上所有按钮和链接都走你的镜像
       text = text.replace(new RegExp(targetHost, 'g'), myHost);
-      
-      // 把可能存在的其他图片服务器也顺便换了
       text = text.replace(/mwappimgs\.cc/g, myHost);
-
-      // 发送修改后的网页
+      
       res.setHeader("Content-Type", contentType);
       return res.status(200).send(text);
     }
 
-    // 4. 图片等资源直接透传
+    // 5. 图片等资源直接发送
     const data = await response.arrayBuffer();
     res.setHeader("Content-Type", contentType);
     return res.status(200).send(Buffer.from(data));
 
   } catch (e) {
-    return res.status(200).send("中转站暂时无法连接漫蛙，请刷新试试: " + e.message);
+    return res.status(200).send("验证节点握手失败，请刷新: " + e.message);
   }
 }
