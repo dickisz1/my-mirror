@@ -2,7 +2,7 @@ export default async function handler(req, res) {
   const targetHost = "manwa.me";
   const myHost = req.headers.host;
   
-  // 1. 如果请求的是验证码零件，直接原样放行，不改动任何代码
+  // 1. 验证码零件直通：这是让“勾选框”跳出来的核心
   if (req.url.includes('cdn-cgi/')) {
     const cfUrl = `https://${targetHost}${req.url}`;
     const cfRes = await fetch(cfUrl);
@@ -17,7 +17,6 @@ export default async function handler(req, res) {
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: {
-        // 维持这个稳定的 UA 身份
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": `https://${targetHost}/`,
         "Cookie": req.headers["cookie"] || "",
@@ -26,13 +25,16 @@ export default async function handler(req, res) {
       redirect: "manual"
     });
 
-    // 2. 传递 Cookie (通关用的身份证)
+    // 2. 存下令牌：这是让你“打勾后能进去”的关键
     const setCookies = response.headers.getSetCookie();
     if (setCookies && setCookies.length > 0) {
-      res.setHeader("Set-Cookie", setCookies.map(c => c.replace(/manwa\.me/g, myHost).replace(/Domain=[^;]+;?/gi, "")));
+      // 强行把漫蛙发的通关令牌绑在你的域名上
+      res.setHeader("Set-Cookie", setCookies.map(c => 
+        c.replace(/manwa\.me/g, myHost).replace(/Domain=[^;]+;?/gi, "")
+      ));
     }
 
-    // 3. 处理重定向
+    // 3. 处理跳转
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") || "";
       res.setHeader("Location", location.replace(targetHost, myHost));
@@ -41,23 +43,24 @@ export default async function handler(req, res) {
 
     const contentType = response.headers.get("content-type") || "";
 
-    // 4. 只在 HTML 网页里替换域名，不要动别的脚本逻辑
+    // 4. 网页域名替换
     if (contentType.includes("text/html")) {
       let text = await response.text();
-      text = text.replace(/manwa\.me/g, myHost);
+      // 让网页里所有按钮都指向你自己
+      text = text.split(targetHost).join(myHost);
       
       res.setHeader("Content-Type", contentType);
-      // 允许验证码加载的关键头
+      // 允许验证脚本运行
       res.setHeader("Content-Security-Policy", "upgrade-insecure-requests");
       return res.status(200).send(text);
     }
 
-    // 5. 图片等资源直接搬运
+    // 5. 图片等资源
     const data = await response.arrayBuffer();
     res.setHeader("Content-Type", contentType);
     return res.status(200).send(Buffer.from(data));
 
   } catch (e) {
-    return res.status(200).send("刷新太快，请稍后重试: " + e.message);
+    return res.status(200).send("验证节点握手失败，请刷新: " + e.message);
   }
 }
