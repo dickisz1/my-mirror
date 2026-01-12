@@ -1,53 +1,52 @@
 export default async function handler(req, res) {
   const targetHost = "manwa.me";
   const myHost = req.headers.host;
-  const targetUrl = `https://${targetHost}${req.url}`;
+  const url = `https://${targetHost}${req.url}`;
+
+  // 1. 完美克隆你的浏览器指纹，不留痕迹
+  const requestHeaders = {};
+  Object.keys(req.headers).forEach(key => {
+    // 关键：把请求头里所有的“你自己域名”换回“漫蛙域名”，欺骗防火墙
+    requestHeaders[key] = req.headers[key].toString().split(myHost).join(targetHost);
+  });
 
   try {
-    const response = await fetch(targetUrl, {
+    const response = await fetch(url, {
       method: req.method,
-      headers: {
-        "User-Agent": req.headers["user-agent"],
-        "Cookie": req.headers["cookie"] || "",
-        "Referer": `https://${targetHost}/`,
-        "Accept": req.headers["accept"],
-        "Accept-Language": "zh-CN,zh;q=0.9"
-      },
-      redirect: "manual"
+      headers: requestHeaders,
+      redirect: 'manual'
     });
 
-    // 1. 传递所有 Cookie，且不做域名强制锁定
-    const setCookies = response.headers.getSetCookie();
-    if (setCookies.length > 0) {
-      res.setHeader("Set-Cookie", setCookies.map(c => c.replace(/Domain=[^;]+;?/gi, "")));
-    }
-
-    // 2. 移除所有安全限制头，让验证码脚本自由运行
+    // 2. 拿到漫蛙的所有响应头，原封不动传回
     response.headers.forEach((v, k) => {
-      if (!['content-security-policy', 'content-length', 'transfer-encoding'].includes(k.toLowerCase())) {
+      // 必须把 Set-Cookie 里的域名修正，浏览器才会存通关令牌
+      if (k.toLowerCase() === 'set-cookie') {
+        res.appendHeader('Set-Cookie', v.replace(/manwa\.me/g, myHost).replace(/Domain=[^;]+;?/gi, ""));
+      } else if (k.toLowerCase() !== 'content-encoding') {
         res.setHeader(k, v.replace(new RegExp(targetHost, 'g'), myHost));
       }
     });
 
-    // 3. 处理跳转
+    // 3. 处理验证后的跳转
     if (response.status >= 300 && response.status < 400) {
-      const loc = response.headers.get("location");
-      return res.status(response.status).setHeader("Location", loc.replace(targetHost, myHost)).send("");
+      const loc = response.headers.get('location');
+      if (loc) res.setHeader('Location', loc.replace(targetHost, myHost));
+      return res.status(response.status).send('');
     }
 
-    // 4. 网页内容：极致简化的域名全局替换
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("text/html")) {
-      const text = await response.text();
-      res.setHeader("Content-Type", contentType);
+    // 4. 只对 HTML 页面做域名替换，保证图片和验证脚本原样运行
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      let text = await response.text();
       return res.status(response.status).send(text.split(targetHost).join(myHost));
     }
 
-    // 5. 其他二进制流
+    // 5. 转发所有二进制流（验证码零件、图片）
     const buffer = await response.arrayBuffer();
     return res.status(response.status).send(Buffer.from(buffer));
 
-  } catch (e) {
-    return res.status(500).send("连接中断，请重试: " + e.message);
+  } catch (err) {
+    // 如果报错，直接显示具体原因
+    return res.status(200).send(`代连失败，可能是漫蛙暂时封锁了IP: ${err.message}`);
   }
 }
