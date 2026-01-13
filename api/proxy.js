@@ -8,6 +8,7 @@ export default async function handler(req) {
   const myHost = url.host;
   const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
 
+  // 1. 转发请求头，并屏蔽 Host 防止循环
   const newHeaders = new Headers();
   req.headers.forEach((v, k) => {
     if (k.toLowerCase() !== 'host') {
@@ -23,74 +24,56 @@ export default async function handler(req) {
     });
 
     const resHeaders = new Headers(response.headers);
+    
+    // 2. 关键：同步 Cookie 并处理域名作用域，保证“打勾”验证有效
     const setCookies = response.headers.getSetCookie();
     resHeaders.delete('set-cookie');
-    setCookies.forEach(c => resHeaders.append('Set-Cookie', c.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost)));
+    setCookies.forEach(c => {
+      resHeaders.append('Set-Cookie', c.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost));
+    });
 
+    // 3. 处理 HTML 页面
     if (resHeaders.get('content-type')?.includes('text/html')) {
       let text = await response.text();
 
-      const extractorCode = `
+      // 仅注入最安全的样式和验证逻辑
+      const safeInject = `
       <style>
-        /* 第一步：让原网页所有内容消失 */
-        html, body { background: #000 !important; visibility: hidden !important; height: 100% !important; overflow: auto !important; }
-
-        /* 第二步：只给漫画主体和必要的交互按钮开绿灯 */
-        #custom-reader, #custom-reader * { visibility: visible !important; }
-        
-        /* 第三步：设计 QQ 动漫风格的 UI */
-        #custom-reader {
-          position: absolute; top: 0; left: 0; width: 100%; min-height: 100%;
-          background: #1a1a1a; display: flex; flex-direction: column; align-items: center;
-          z-index: 999999;
+        /* 仅保证图片填满宽度，不改动其他任何图标尺寸 */
+        .manga-page img, .comic-img {
+          width: 100% !important;
+          max-width: 100% !important;
+          height: auto !important;
+          display: block !important;
         }
-        #custom-header {
-          width: 100%; height: 50px; background: #222; color: #eee;
-          display: flex; align-items: center; justify-content: center;
-          position: sticky; top: 0; font-weight: bold; border-bottom: 1px solid #333;
-        }
-        .clean-img { width: 100%; max-width: 800px; display: block; margin: 0 auto; }
+        /* 确保 Cloudflare 验证框始终可见 */
+        #cf-bubbles, .cf-turnstile { display: block !important; visibility: visible !important; }
       </style>
-
       <script>
         (function() {
-          window.addEventListener('DOMContentLoaded', () => {
-            // 创建我们的私人容器
-            const reader = document.createElement('div');
-            reader.id = 'custom-reader';
-            reader.innerHTML = '<div id="custom-header">极净预览模式</div><div id="img-container"></div>';
-            document.body.appendChild(reader);
-
-            const container = reader.querySelector('#img-container');
-
-            // 提取所有漫画图（排除掉那些带 ads 的干扰项）
-            const imgs = document.querySelectorAll('img');
-            imgs.forEach(img => {
-              const src = img.getAttribute('data-original') || img.getAttribute('data-src') || img.src;
-              if (src && !src.includes('ads') && !src.includes('logo') && img.width > 100) {
-                const newImg = new Image();
-                newImg.src = src;
-                newImg.className = 'clean-img';
-                container.appendChild(newImg);
-              }
-            });
-
-            // 提取标题
-            const title = document.querySelector('title')?.innerText || "正在阅读";
-            document.getElementById('custom-header').innerText = title.split('-')[0];
-          });
+          // 仅用于提示验证状态
+          setInterval(() => {
+            if (document.cookie.includes('cf_clearance') && !window.notified) {
+              console.log("✅ 验证已通过");
+              window.notified = true;
+            }
+          }, 2000);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${extractorCode}</head>`);
+      text = text.replace('</head>', `${safeInject}</head>`);
+      
+      // 保持域名替换，确保链接能点击
       return new Response(text.split(targetHost).join(myHost), {
         status: response.status,
         headers: resHeaders
       });
     }
 
+    // 非 HTML 内容（图片等）直接返回
     return new Response(response.body, { status: response.status, headers: resHeaders });
+
   } catch (err) {
-    return new Response("Error: " + err.message, { status: 502 });
+    return new Response("Proxy Error: " + err.message, { status: 502 });
   }
 }
