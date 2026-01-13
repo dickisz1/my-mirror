@@ -29,42 +29,16 @@ export default async function handler(req) {
 
     if (resHeaders.get('content-type')?.includes('text/html')) {
       let text = await response.text();
-    // 在返回 HTML 之前，执行这一段深度替换
-if (resHeaders.get('content-type')?.includes('text/html')) {
-    let text = await response.text();
 
-    // 1. 规律封杀：直接在 HTML 源码层面把广告链接替换成空位
-    // 封杀 ads 目录和 banner 目录的所有图片/动图
-    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/ads\/[^"']+/g, '');
-    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/book\/banner\/[^"']+/g, '');
-    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/images\/new_logo\.svg[^"']+/g, '');
+      // 1. 规律封杀：源码级剔除广告链接（针对 mwappimgs.cc）
+      text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/ads\/[^"']+/g, '');
+      text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/book\/banner\/[^"']+/g, '');
+      text = text.replace(/https:\/\/mwappimgs\.cc\/static\/images\/new_logo\.svg[^"']+/g, '');
 
-    const finalStyle = `
-    <style>
-        /* 隐藏所有 src 为空的图片标签，防止出现“碎图”占位 */
-        img[src=""], img:not([src]), a[href*="小蓝俱乐部"] { 
-            display: none !important; 
-        }
-        
-        /* 针对你给的“小蓝俱乐部”等关键词进行关键词爆破 */
-        a[title*="俱乐部"], div:has(> a[href*="club"]), .fixed-banner {
-            display: none !important;
-        }
-
-        /* 之前做好的自适应尺寸保持不变 */
-        img { max-width: 100% !important; height: auto !important; }
-    </style>`;
-
-    text = text.replace('</head>', `${finalStyle}</head>`);
-    return new Response(text.split(targetHost).join(myHost), {
-        status: response.status,
-        headers: resHeaders
-    });
-}
-      // --- 核心样式增强：响应式尺寸 + 广告粉碎 ---
-      const injectCode = `
+      // 2. 注入 CSS (净化样式 + 自适应)
+      const injectStyle = `
       <style>
-        /* 1. 漫画图片尺寸自适应：无论浏览器多大，图片始终填满宽度且不失真 */
+        /* 响应式尺寸：图片填满屏幕 */
         img, .manga-page, .comic-img {
           max-width: 100% !important;
           height: auto !important;
@@ -72,29 +46,29 @@ if (resHeaders.get('content-type')?.includes('text/html')) {
           display: block !important;
           margin: 0 auto !important;
         }
-
-        /* 2. 强制隐藏广告与登录提示：
-           这里涵盖了漫蛙常见的：顶部banner、悬浮窗、弹窗、APP下载提示、登录遮罩 */
-        [class*="ads"], [id*="ads"], 
-        .fixed-ad, .ad-item, .pop-window, 
-        .login-guide, .login-mask, .vip-pay-guide,
-        .download-app-bar, .footer-ad, .header-ad,
-        iframe, #ad_root {
+        /* 隐藏广告占位及特定关键词 */
+        img[src=""], img:not([src]), a[href*="俱乐部"], a[href*="club"], .fixed-banner, 
+        [class*="ads"], [id*="ads"], .fixed-ad, .ad-item, .pop-window, 
+        .login-guide, .login-mask, .download-app-bar, iframe {
           display: none !important;
           opacity: 0 !important;
-          pointer-events: none !important;
         }
-
-        /* 3. 移除多余的间距，让阅读更沉浸 */
         html, body { overflow-x: hidden !important; width: 100% !important; padding: 0 !important; margin: 0 !important; }
-        .container, .content-box { width: 100% !important; padding: 0 !important; }
-      </style>
-      
+      </style>`;
+
+      // 3. 注入 JS (反调试保护 + 自动清理 + 通关通知)
+      const injectScript = `
       <script>
         (function() {
-          // 自动化处理：移除动态加载的广告
+          // --- 反调试保护 ---
+          const _constructor = window.Function.prototype.constructor;
+          window.Function.prototype.constructor = function(str) {
+            if (str === 'debugger') return function() {};
+            return _constructor.apply(this, arguments);
+          };
+
+          // --- 自动清理动态元素 ---
           const clean = () => {
-            // 查找所有包含“登录”、“下载”、“广告”等字眼的按钮并移除
             document.querySelectorAll('div, a, span').forEach(el => {
               const txt = el.innerText;
               if (txt.includes('下载APP') || txt.includes('登录观看') || txt.includes('立即充值')) {
@@ -102,22 +76,26 @@ if (resHeaders.get('content-type')?.includes('text/html')) {
               }
             });
           };
-          
-          setInterval(clean, 1000);
-          
-          // 之前的通关同步逻辑
-          if (Notification.permission === 'default') Notification.requestPermission();
+          setInterval(clean, 1500);
+
+          // --- 通关通知 ---
+          if ("Notification" in window && Notification.permission === 'default') Notification.requestPermission();
           setInterval(() => {
             if (document.cookie.includes('cf_clearance') && !window.notified) {
-              new Notification("✅ 漫蛙极净模式已启动", { body: "尺寸自适应已就绪" });
+              new Notification("✅ 极净模式已启动", { body: "已为您自动优化排版并拦截广告" });
               window.notified = true;
             }
           }, 2000);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${injectCode}</head>`);
-      return new Response(text.split(targetHost).join(myHost), { status: response.status, headers: resHeaders });
+      text = text.replace('</head>', `${injectStyle}${injectScript}</head>`);
+      
+      // 执行最终域名替换并返回
+      return new Response(text.split(targetHost).join(myHost), {
+        status: response.status,
+        headers: resHeaders
+      });
     }
 
     return new Response(response.body, { status: response.status, headers: resHeaders });
