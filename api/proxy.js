@@ -31,40 +31,54 @@ export default async function handler(req) {
       let text = await response.text();
 
       // 只注入最基础的逻辑，不改动原始 HTML 内容
-    const baseInject = `
+   const baseInject = `
       <style>
-        /* 1. 基础布局保护 */
+        /* 1. 基础布局保护：确保漫画图片正常，排版不乱 */
         img { max-width: 100% !important; height: auto !important; }
         .manga-page img { width: 100% !important; }
+        .notice-icon, img[src*="notice"] { max-width: 30px !important; }
 
-        /* 2. 广告精准爆破（只隐藏，不删源码，保护排版） */
-        /* 顶部大横幅 */
-        .swiper-container a[target="_blank"], 
-        .swiper-slide img[src*="ads"],
-        /* 底部浮动广告 */
-        .fixed-ad, div[style*="position: fixed"] > a,
-        /* 右侧悬浮球 */
-        .game-link, .sign-link, a[href*="game"], .fixed-widgets,
-        /* 你的 uBlock 精准规则 */
-        a[href][target] > input[alt][src][type][style] 
+        /* 2. 广告精准粉碎（基于你提供的 uBlock 规则） */
+        
+        /* 拦截伪装成 input 的图片链接广告 */
+        a[href][target] > input[alt][src][type][style],
+        div:nth-of-type(2) > a > input,
+        div[data-group][style] > a[href] > input[alt][src][type][style],
+        
+        /* 拦截指定的广告区域类名 */
+        div.ad-area,
+        
+        /* 移除“回到顶部”或伪装的浮动图标 */
+        img.return-top,
+
+        /* 3. 补充封杀：拦截常见的悬浮毒瘤 */
+        .fixed-ad, 
+        .game-link, 
+        .sign-link, 
+        a[href*="game"],
+        .swiper-slide img[src*="ads"] 
         {
           display: none !important;
           visibility: hidden !important;
-          pointer-events: none !important;
+          opacity: 0 !important;
+          pointer-events: none !important; /* 防止误点 */
+          height: 0 !important;
+          margin: 0 !important;
         }
 
-        /* 3. 修正喇叭图标（双重保险） */
-        .notice-icon, img[src*="notice"] {
-          max-width: 30px !important;
-        }
+        /* 4. 解决碎图占位问题 */
+        img[src=""], img:not([src]) { display: none !important; }
       </style>
+
       <script>
         (function() {
+          // 通关通知逻辑
           if (Notification.permission === 'default') Notification.requestPermission();
+          let notified = false;
           setInterval(() => {
-            if (document.cookie.includes('cf_clearance') && !window.notified) {
-              new Notification("✅ 极净模式（温和版）已启动", { body: "排版已修复，广告已遮蔽" });
-              window.notified = true;
+            if (document.cookie.includes('cf_clearance') && !notified) {
+              new Notification("✅ 极净模式（规则已同步）", { body: "已加载最新的 uBlock 精准规则" });
+              notified = true;
             }
           }, 2000);
         })();
