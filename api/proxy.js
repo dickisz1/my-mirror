@@ -37,6 +37,29 @@ export default async function handler(req) {
       // 2. 样式级封杀：集成你提供的 uBlock 精准规则
       const injectStyle = `
       <style>
+      /* 1. 强力约束公告喇叭的尺寸，防止爆屏 */
+  img[src*="notice"], .notice-icon, i[class*="mega"], svg, img {
+    max-width: 100px !important; /* 限制大喇叭图标 */
+    height: auto !important;
+  }
+
+  /* 2. 修复右侧空白，尝试让内容居中或填充 */
+  .main-content, #app, body {
+    background-color: #fff !important;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* 3. 针对你图中右下角的浮动图标进行清理 */
+  .fixed-widgets, a[href*="sign"], .game-link, .float-nav {
+    display: none !important;
+  }
+
+  /* 4. 保持漫画图片全屏 */
+  .manga-page img {
+    width: 100vw !important;
+    max-width: 100vw !important;
         /* 响应式尺寸：漫画图片全屏 */
         img, .manga-page, .comic-img {
           max-width: 100% !important;
