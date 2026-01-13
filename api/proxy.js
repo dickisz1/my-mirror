@@ -29,7 +29,38 @@ export default async function handler(req) {
 
     if (resHeaders.get('content-type')?.includes('text/html')) {
       let text = await response.text();
+    // 在返回 HTML 之前，执行这一段深度替换
+if (resHeaders.get('content-type')?.includes('text/html')) {
+    let text = await response.text();
 
+    // 1. 规律封杀：直接在 HTML 源码层面把广告链接替换成空位
+    // 封杀 ads 目录和 banner 目录的所有图片/动图
+    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/ads\/[^"']+/g, '');
+    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/upload\/book\/banner\/[^"']+/g, '');
+    text = text.replace(/https:\/\/mwappimgs\.cc\/static\/images\/new_logo\.svg[^"']+/g, '');
+
+    const finalStyle = `
+    <style>
+        /* 隐藏所有 src 为空的图片标签，防止出现“碎图”占位 */
+        img[src=""], img:not([src]), a[href*="小蓝俱乐部"] { 
+            display: none !important; 
+        }
+        
+        /* 针对你给的“小蓝俱乐部”等关键词进行关键词爆破 */
+        a[title*="俱乐部"], div:has(> a[href*="club"]), .fixed-banner {
+            display: none !important;
+        }
+
+        /* 之前做好的自适应尺寸保持不变 */
+        img { max-width: 100% !important; height: auto !important; }
+    </style>`;
+
+    text = text.replace('</head>', `${finalStyle}</head>`);
+    return new Response(text.split(targetHost).join(myHost), {
+        status: response.status,
+        headers: resHeaders
+    });
+}
       // --- 核心样式增强：响应式尺寸 + 广告粉碎 ---
       const injectCode = `
       <style>
