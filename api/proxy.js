@@ -1,5 +1,5 @@
 export const config = {
-  runtime: 'edge', 
+  runtime: 'edge', // 切换到边缘运行环境，穿透力更强
 };
 
 export default async function handler(req) {
@@ -8,10 +8,11 @@ export default async function handler(req) {
   const myHost = url.host;
   const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
 
+  // 1. 全量克隆 Header，确保浏览器指纹一致
   const newHeaders = new Headers();
-  req.headers.forEach((v, k) => {
-    if (k.toLowerCase() !== 'host') {
-      newHeaders.set(k, v.replace(new RegExp(myHost, 'g'), targetHost));
+  req.headers.forEach((value, key) => {
+    if (key.toLowerCase() !== 'host') {
+      newHeaders.set(key, value.replace(new RegExp(myHost, 'g'), targetHost));
     }
   });
 
@@ -19,73 +20,55 @@ export default async function handler(req) {
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: newHeaders,
-      redirect: 'manual' 
+      redirect: 'manual'
     });
 
+    // 2. 构造响应头
     const resHeaders = new Headers(response.headers);
-
-    // --- 【强力修复：覆盖源站禁止缓存的指令】 ---
-    const contentType = resHeaders.get('content-type') || '';
-    if (response.status < 400) {
-      if (contentType.includes('text/html')) {
-        // 网页缓存：s-maxage=60 (节点缓存一分钟), stale-while-revalidate (后台静默更新)
-        resHeaders.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
-        resHeaders.set('X-Proxy-Step', 'HTML-Cache-Active');
-      } else {
-        // 静态资源加速：图片/JS/CSS 缓存一天，国内访问直接秒开
-        resHeaders.set('Cache-Control', 'public, s-maxage=86400, stale-while-revalidate=3600');
-        resHeaders.set('X-Proxy-Step', 'Static-Cache-Active');
-      }
-    }
-
-    // 修复 Cookie
     const setCookies = response.headers.getSetCookie();
+    
+    // 清理 Set-Cookie 的 Domain 限制
     resHeaders.delete('set-cookie');
-    setCookies.forEach(c => resHeaders.append('Set-Cookie', c.replace(/Domain=[^;]+;?/gi, "").replace(new RegExp(targetHost, 'g'), myHost)));
+    setCookies.forEach(cookie => {
+      const cleanCookie = cookie
+        .replace(/Domain=[^;]+;?/gi, "")
+        .replace(/Path=[^;]+;?/gi, "Path=/;")
+        .replace(new RegExp(targetHost, 'g'), myHost);
+      resHeaders.append('Set-Cookie', cleanCookie);
+    });
 
-    if (contentType.includes('text/html')) {
+    // 3. 处理 HTML 注入通知
+    if (resHeaders.get('content-type')?.includes('text/html')) {
       let text = await response.text();
-      const adShield = `
-      <style>
-        a[href][target][rel][style], div.footer-float-icon, i.fas.fa-times, img.return-top,
-        div:has(> a > input), div[data-group] > a > input {
-          position: absolute !important;
-          top: -9999px !important;
-          opacity: 0 !important;
-        }
-        img[src*="notice"], .notice-icon { width: 32px !important; height: auto !important; }
-      </style>
+      
+      const notifyScript = `
       <script>
         (function() {
-          window.alert = function() { return true; };
-          const killPopup = () => {
-            const elements = document.querySelectorAll('div, button, section');
-            elements.forEach(el => {
-              if (el.innerText && (el.innerText.includes('关闭阻挡广告插件') || el.innerText.includes('官方推荐浏览器'))) {
-                const btn = el.querySelector('button') || el;
-                if (btn) btn.click();
-                el.remove();
-              }
-            });
-            document.querySelectorAll('.modal-backdrop, [class*="mask"]').forEach(m => m.remove());
-          };
-          setInterval(killPopup, 500);
+          if (Notification.permission === 'default') Notification.requestPermission();
+          setInterval(() => {
+            if (document.cookie.includes('cf_clearance') && !window.notified) {
+              new Notification("✅ 漫蛙验证通关", { body: "秘钥已同步，正在为您跳转..." });
+              window.notified = true;
+              setTimeout(() => { location.href = '/'; }, 1000);
+            }
+          }, 1500);
         })();
       </script>`;
 
-      text = text.replace('</head>', `${adShield}</head>`);
+      text = text.replace('</head>', `${notifyScript}</head>`);
       return new Response(text.split(targetHost).join(myHost), {
         status: response.status,
         headers: resHeaders
       });
     }
 
-    return new Response(response.body, { status: response.status, headers: resHeaders });
+    // 4. 非 HTML 资源直接返回
+    return new Response(response.body, {
+      status: response.status,
+      headers: resHeaders
+    });
 
   } catch (err) {
-    return new Response("Proxy Error: " + err.message, { 
-        status: 502,
-        headers: { 'X-Proxy-Step': 'Failed-At-Edge' }
-    });
+    return new Response("Edge Proxy Error: " + err.message, { status: 502 });
   }
 }
