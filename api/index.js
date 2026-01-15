@@ -19,33 +19,27 @@ export default async function handler(req) {
     const resHeaders = new Headers(response.headers);
     const contentType = resHeaders.get('content-type') || '';
 
-    // 【关键点 1】告诉 Vercel 节点：把这个成品存起来！
-    // s-maxage=3600 意味着服务器会把处理好的成品存 1 小时
+    // 【成品化步骤 1】强制 Vercel 存储这个处理好的成品
     if (response.status === 200) {
+      // 存储 1 小时，即使过期了也先给用户看旧的(秒开)，后台再更新
       resHeaders.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
     }
 
     if (contentType.includes('text/html')) {
-      // 【关键点 2】在服务器端就把所有“懒加载”代码改掉
       let text = await response.text();
       
-      // 暴力破解懒加载：直接把 data-src 替换成 src
-      // 这样图片在发给手机前，已经是“待加载”状态，不需要等 JS 运行
+      // 【成品化步骤 2】在服务器端直接破解懒加载
+      // 把所有 data-src 直接换成 src，这样手机拿到网页时，图片就已经在加载了
       text = text.replace(/data-src=/g, 'src=')
                  .replace(/data-original=/g, 'src=');
 
-      // 暴力去广告：直接在服务器端删除广告链接
-      text = text.replace(/<script\b[^>]*>([\s\S]*?)adsterra[\s\S]*?<\/script>/gmi, '')
-                 .replace(new RegExp(targetHost, 'g'), myHost);
+      // 【成品化步骤 3】服务器端全域名替换
+      text = text.split(targetHost).join(myHost);
 
-      return new Response(text, { 
-        status: 200, 
-        headers: resHeaders 
-      });
+      return new Response(text, { status: 200, headers: resHeaders });
     }
 
     return new Response(response.body, { status: response.status, headers: resHeaders });
-
   } catch (err) {
     return new Response("Server Error", { status: 500 });
   }
