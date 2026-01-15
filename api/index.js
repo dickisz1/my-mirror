@@ -42,26 +42,51 @@ if (contentType.includes('text/html')) {
         /* 这里的代码对应你发出来的去广告规则 */
         a[href][target][rel][style], .footer-float-icon, i.fas.fa-times, 
         img.return-top, div:has(> a > input) { display: none !important; opacity: 0 !important; }
+        /* 强制隐藏所有带 ad 字样的容器和悬浮层 */
+[class*="ad-"], [id*="ad-"], .footer-float-icon, .notice-icon, 
+div[style*="fixed"] > a[href*="http"], 
+div[style*="z-index: 999999"], 
+.modal-backdrop, .mask { 
+    display: none !important; 
+    width: 0 !important; 
+    height: 0 !important; 
+    overflow: hidden !important; 
+}
       </style>
-      <script>
-  (function() {
-    const solveLazy = () => {
-      const imgs = document.querySelectorAll('img[data-src], img[data-original]');
-      imgs.forEach((img, index) => {
-        const src = img.getAttribute('data-src') || img.getAttribute('data-original');
-        if (src && img.src !== src) {
-          // 如果是前 10 张图，或者是距离屏幕较近的图，直接加载
-          const rect = img.getBoundingClientRect();
-          if (index < 10 || rect.top < window.innerHeight * 2) { 
-            img.src = src;
-            img.removeAttribute('data-src');
-          }
+    <script>
+(function() {
+    // 增加耗时显示
+    const startTime = performance.now();
+    const timerDiv = document.createElement('div');
+    timerDiv.style = "position:fixed;top:5px;left:5px;background:rgba(0,0,0,0.5);color:#fff;z-index:999999;padding:2px 5px;font-size:10px;border-radius:3px;pointer-events:none;";
+    document.body.appendChild(timerDiv);
+
+    const updateTimer = () => {
+        const loadTime = ((performance.now() - startTime) / 1000).toFixed(2);
+        timerDiv.innerText = "🚀 加速中: " + loadTime + "s";
+        if (document.readyState === 'complete') {
+            timerDiv.style.background = "#28a745"; // 加载完变绿
+            setTimeout(() => timerDiv.remove(), 3000); // 3秒后消失
         }
-      });
     };
-    // 提高扫描频率到 0.5 秒，让图片加载反应更快
+    setInterval(updateTimer, 100);
+
+    // 之前的智能预加载逻辑 ...
+    const solveLazy = () => {
+        const imgs = document.querySelectorAll('img[data-src], img[data-original]');
+        imgs.forEach((img, index) => {
+            const src = img.getAttribute('data-src') || img.getAttribute('data-original');
+            if (src && img.src !== src) {
+                const rect = img.getBoundingClientRect();
+                if (index < 10 || rect.top < window.innerHeight * 2) { 
+                    img.src = src;
+                    img.removeAttribute('data-src');
+                }
+            }
+        });
+    };
     setInterval(solveLazy, 500);
-  })();
+})();
 </script>
       text = text.replace('</head>', `${injectCode}</head>`);
       // 全文替换域名
