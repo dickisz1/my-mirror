@@ -25,13 +25,12 @@ export default async function handler(req) {
 
     // 2. 【核心功能】智能缓存策略：覆盖源站的 max-age=0
     if (response.status < 400) {
-      if (contentType.includes('text/html')) {
-        // 网页缓存 1 分钟，后台异步更新
-        resHeaders.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
-      } else {
-        // 图片等静态资源缓存 1 天
-        resHeaders.set('Cache-Control', 'public, s-maxage=86400');
-      }
+     // 在你的 index.js 中修改 Cache-Control
+if (contentType.includes('text/html')) {
+  // s-maxage=60: 节点缓存一分钟
+  // stale-while-revalidate=3600: 缓存过期后的一个小时内，先给用户看旧的（瞬间打开），后台异步更新
+  resHeaders.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=3600');
+}
     }
 
     // 3. 处理 HTML 内容（注入去广告和破解懒加载脚本）
@@ -45,22 +44,25 @@ export default async function handler(req) {
         img.return-top, div:has(> a > input) { display: none !important; opacity: 0 !important; }
       </style>
       <script>
-        (function() {
-          // 破解懒加载：每秒扫描一次并将 data-src 转换为真实的 src
-          const solveLazy = () => {
-            document.querySelectorAll('img[data-src], img[data-original]').forEach(img => {
-              const src = img.getAttribute('data-src') || img.getAttribute('data-original');
-              if (src && img.src !== src) {
-                img.src = src;
-                img.removeAttribute('data-src');
-              }
-            });
-          };
-          setInterval(solveLazy, 1000);
-          window.alert = () => true; // 屏蔽烦人的弹窗
-        })();
-      </script>`;
-
+  (function() {
+    const solveLazy = () => {
+      const imgs = document.querySelectorAll('img[data-src], img[data-original]');
+      imgs.forEach((img, index) => {
+        const src = img.getAttribute('data-src') || img.getAttribute('data-original');
+        if (src && img.src !== src) {
+          // 如果是前 10 张图，或者是距离屏幕较近的图，直接加载
+          const rect = img.getBoundingClientRect();
+          if (index < 10 || rect.top < window.innerHeight * 2) { 
+            img.src = src;
+            img.removeAttribute('data-src');
+          }
+        }
+      });
+    };
+    // 提高扫描频率到 0.5 秒，让图片加载反应更快
+    setInterval(solveLazy, 500);
+  })();
+</script>
       text = text.replace('</head>', `${injectCode}</head>`);
       // 全文替换域名
       const body = text.split(targetHost).join(myHost);
