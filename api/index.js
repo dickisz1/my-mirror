@@ -11,16 +11,24 @@ export default async function handler(req) {
 
   const headers = new Headers(res.headers);
   
-  // 【最核心一行】：强制 Vercel 缓存这个成品 1 小时 (3600秒)
-  // s-maxage 是服务器缓存的关键标识
+  // --- 关键修改：清理干扰项 ---
+  // 1. 必须删掉 Set-Cookie，否则 Vercel 为了安全绝不会缓存该页面
+  headers.delete('Set-Cookie');
+  
+  // 2. 删掉原站可能存在的私有缓存指令（如 private, no-cache）
+  headers.delete('Pragma');
+  
+  // 3. 强制覆盖缓存指令
   headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=600');
 
-  // 如果是 HTML，在这里处理完域名替换再返回
   if (headers.get('content-type')?.includes('text/html')) {
     let text = await res.text();
     text = text.split(targetHost).join(url.host);
+    
+    // 返回处理后的文本
     return new Response(text, { headers });
   }
 
+  // 返回原始流
   return new Response(res.body, { headers });
 }
