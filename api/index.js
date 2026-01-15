@@ -11,24 +11,24 @@ export default async function handler(req) {
 
   const headers = new Headers(res.headers);
   
-  // --- 关键修改：清理干扰项 ---
-  // 1. 必须删掉 Set-Cookie，否则 Vercel 为了安全绝不会缓存该页面
-  headers.delete('Set-Cookie');
-  
-  // 2. 删掉原站可能存在的私有缓存指令（如 private, no-cache）
+  // --- 【关键修正：杀掉 Cookie 封印】 ---
+  headers.delete('Set-Cookie'); 
   headers.delete('Pragma');
   
-  // 3. 强制覆盖缓存指令
+  // 强制服务器缓存成品 1 小时
   headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=600');
 
   if (headers.get('content-type')?.includes('text/html')) {
     let text = await res.text();
+    
+    // 暴力破解懒加载：把 data-src 直接换成 src
+    text = text.replace(/data-src=/g, 'src=').replace(/data-original=/g, 'src=');
+    
+    // 域名替换
     text = text.split(targetHost).join(url.host);
     
-    // 返回处理后的文本
     return new Response(text, { headers });
   }
 
-  // 返回原始流
   return new Response(res.body, { headers });
 }
