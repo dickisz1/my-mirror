@@ -1,56 +1,93 @@
-export const config = { runtime: 'edge' };
+export const config = { runtime: 'edge' }
 
-export default async function handler(req) {
-  const targetHost = "manwa.me";
-  const url = new URL(req.url);
-  const myHost = url.host;
+/**
+ * 私人阅读书源代理（最终形态）
+ * 设计目标：稳定、低维护、强缓存
+ */
 
-  // 1. 核心抓取逻辑：如果路径包含 _img_proxy_，则中转图片
+/* ======== 站点配置（只改这一块） ======== */
+
+const SITE = {
+  host: 'manwa.me',
+  referer: 'https://manwa.me/',
+  imageAttrs: ['data-src', 'data-original', 'src'],
+
+  cache: {
+    html: 'public, s-maxage=7200, stale-while-revalidate=86400',
+    image: 'public, s-maxage=604800, immutable'
+  }
+}
+
+/* ======== 入口 ======== */
+
+export default async function handler(req: Request) {
+  const url = new URL(req.url)
+
   if (url.pathname.startsWith('/_img_proxy_/')) {
-    const actualImageUrl = url.pathname.replace('/_img_proxy_/', 'https://');
-    const imgRes = await fetch(actualImageUrl, {
-      headers: { 'referer': `https://${targetHost}/` }
-    });
-    const imgHeaders = new Headers(imgRes.headers);
-    // 强制缓存图片 1 天
-    imgHeaders.set('Cache-Control', 'public, s-maxage=86400');
-    return new Response(imgRes.body, { headers: imgHeaders });
+    return proxyImage(url)
   }
 
-  // 2. 模拟书源请求：强制不带 Cookie 去抓取 HTML
-  const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
+  return proxyHtml(url)
+}
+
+/* ======== HTML 代理 ======== */
+
+async function proxyHtml(url: URL) {
+  const targetUrl = `https://${SITE.host}${url.pathname}${url.search}`
+
   const res = await fetch(targetUrl, {
-    headers: { 
-      'host': targetHost, 
-      'referer': `https://${targetHost}/`,
-      'cookie': '' // 彻底切断登录关联，让服务器敢于缓存
+    headers: {
+      host: SITE.host,
+      referer: SITE.referer,
+      cookie: '' // 永远禁用用户态
     }
-  });
+  })
 
-  const headers = new Headers(res.headers);
-  // 3. 【解决 MISS】清理所有可能导致缓存失效的头
-  headers.delete('Set-Cookie'); 
-  headers.delete('Vary');
-  headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=600');
+  const headers = new Headers(res.headers)
 
-  if (headers.get('content-type')?.includes('text/html')) {
-    let text = await res.text();
+  // —— 强制缓存确定性 —— //
+  headers.delete('set-cookie')
+  headers.delete('vary')
+  headers.set('cache-control', SITE.cache.html)
 
-    // 4. 【书源式提取】暴力将所有懒加载图片替换为直接加载的代理地址
-    // 匹配 data-src 或 data-original，将其转换为成品 src
-    text = text.replace(/(data-src|data-original|src)="https:\/\/([^"]+)"/g, (match, p1, p2) => {
-      return `src="https://${myHost}/_img_proxy_/${p2}"`;
-    });
-
-    // 5. 注入“成品化”增强脚本（可选，用于极致去广告）
-    const injectCss = `<style>a[href*="adsterra"], .ad-box, [id*="ad-"] { display:none!important; }</style>`;
-    text = text.replace('</head>', `${injectCss}</head>`);
-
-    // 6. 全域名替换
-    const body = text.split(targetHost).join(myHost);
-    
-    return new Response(body, { status: 200, headers });
+  // 非 HTML 不处理
+  if (!headers.get('content-type')?.includes('text/html')) {
+    return new Response(res.body, { status: res.status, headers })
   }
 
-  return new Response(res.body, { status: res.status, headers });
+  let html = await res.text()
+
+  html = normalizeImages(html, url.host)
+  html = html.split(SITE.host).join(url.host)
+
+  return new Response(html, { status: 200, headers })
+}
+
+/* ======== 图片代理 ======== */
+
+async function proxyImage(url: URL) {
+  const imgUrl = url.pathname.replace('/_img_proxy_/', 'https://')
+
+  const res = await fetch(imgUrl, {
+    headers: { referer: SITE.referer }
+  })
+
+  const headers = new Headers(res.headers)
+  headers.set('cache-control', SITE.cache.image)
+
+  return new Response(res.body, { headers })
+}
+
+/* ======== 图片书源化 ======== */
+
+function normalizeImages(html: string, myHost: string) {
+  const attrs = SITE.imageAttrs.join('|')
+  const reg = new RegExp(
+    `(${attrs})="https://([^"]+)"`,
+    'g'
+  )
+
+  return html.replace(reg, (_, __, path) =>
+    `src="https://${myHost}/_img_proxy_/${path}"`
+  )
 }
