@@ -9,7 +9,7 @@
       "destination": "/app/$1"
     },
     {
-      "source": "/(.*)",
+      "source": "/",
       "destination": "/app/index.html"
     }
   ],
