@@ -1,11 +1,21 @@
 {
-  "rewrites": [
-    { "source": "/editor", "destination": "/editor/index.html" },
-    { "source": "/editor/(.*)", "destination": "/editor/$1" },
-
-    { "source": "/app", "destination": "/app/index.html" },
-    { "source": "/app/(.*)", "destination": "/app/$1" },
-
-    { "source": "/(.*)", "destination": "/api/index" }
-  ]
+  "routes": [
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index"
+    }
+  ],
+  "functions": {
+    "api/index.ts": {
+      "runtime": "edge",
+      "regions": ["hnd1"]
+    }
+  }
 }
