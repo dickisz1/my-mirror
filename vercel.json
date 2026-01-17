@@ -2,7 +2,5 @@
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
   ],
-  "functions": {
       "regions": ["hnd1"]
-  }
 }
