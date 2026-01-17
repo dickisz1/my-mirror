@@ -1,13 +1,11 @@
 {
   "rewrites": [
-   
     { "source": "/(.*)", "destination": "/api/proxy" }
   ],
   "functions": {
-    "api/*.js": {
+    "api/proxy.js": {
       "runtime": "edge",
-    
       "regions": ["hnd1"]
     }
   }
-} 
+}
