@@ -4,7 +4,6 @@
   ],
   "functions": {
     "api/*.js": {
-      "runtime": "edge",
       "regions": ["hnd1"]
     }
   }
