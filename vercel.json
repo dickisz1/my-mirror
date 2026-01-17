@@ -1,8 +1,9 @@
 {
   "rewrites": [
     { "source": "/editor/(.*)", "destination": "/editor/$1" },
+    { "source": "/app/(.*)", "destination": "/app/$1" },
     { "source": "/(.*)", "destination": "/api/index" }
-  ]，
+  ],
   "functions": {
     "api/*.js": {
       "runtime": "edge",
