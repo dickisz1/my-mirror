@@ -86,3 +86,44 @@ function normalizeImages(html, myHost) {
     `src="https://${myHost}/_img_proxy_/${path}"`
   )
 }
+  // 3. 处理 Cookie
+    const setCookies = response.headers.getSetCookie();
+    resHeaders.delete('set-cookie');
+    setCookies.forEach(cookie => {
+      const cleanCookie = cookie
+        .replace(/Domain=[^;]+;?/gi, "")
+        .replace(new RegExp(targetHost, 'g'), myHost);
+      resHeaders.append('Set-Cookie', cleanCookie);
+    });
+
+    const contentType = resHeaders.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      let text = await response.text();
+      
+      // 4. 注入你提供的去广告 CSS 规则
+      const adShield = `
+      <style>
+        a[href][target][rel][style], 
+        div.footer-float-icon, 
+        i.fas.fa-times, 
+        img.return-top,
+        img[src][loading],
+        div:nth-of-type(1) > a > input,
+        div:nth-of-type(2) > a > input,
+        div:nth-of-type(2) > div:nth-of-type(2) > div,
+        div:nth-of-type(3) > a > input {
+          display: none !important;
+          opacity: 0 !important;
+          position: absolute !important;
+          top: -9999px !important;
+        }
+      </style>`;
+
+      // 将去广告规则注入到 head
+      text = text.replace('</head>', `${adShield}</head>`);
+
+      return new Response(text.split(targetHost).join(myHost), {
+        status: response.status,
+        headers: resHeaders
+      });
+    }
