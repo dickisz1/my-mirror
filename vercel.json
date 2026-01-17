@@ -1,10 +1,13 @@
 {
-  "version": 2,
-  "cleanUrls": true,
   "rewrites": [
-    {
-      "source": "/editor",
-      "destination": "/editor/index.html"
+   
+    { "source": "/(.*)", "destination": "/api/proxy" }
+  ],
+  "functions": {
+    "api/*.js": {
+      "runtime": "edge",
+    
+      "regions": ["hnd1"]
     }
-  ]
-}
+  }
+} 
