@@ -3,8 +3,9 @@
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "functions": {
-    "api/*.js": {
-      "runtime": "edge"
+    "api/index.js": {
+      "runtime": "edge",
+      "regions": ["hnd1", "icn1", "sin1"] 
     }
   }
 }
