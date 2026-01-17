@@ -1,28 +1,24 @@
 export const config = { runtime: 'edge' }
 
-/**
- * 私人阅读书源代理（最终形态）
- * 设计目标：稳定、低维护、强缓存
- */
-
-/* ======== 站点配置（只改这一块） ======== */
-
+/* ======== 站点配置 ======== */
 const SITE = {
   host: 'manwa.me',
   referer: 'https://manwa.me/',
   imageAttrs: ['data-src', 'data-original', 'src'],
 
   cache: {
+    // 页面缓存：让 Vercel 在内存存 2 小时，过期后先给旧数据后台更新
     html: 'public, s-maxage=7200, stale-while-revalidate=86400',
+    // 图片缓存：存 7 天
     image: 'public, s-maxage=604800, immutable'
   }
 }
 
 /* ======== 入口 ======== */
-
-export default async function handler(req: Request) {
+export default async function handler(req) {
   const url = new URL(req.url)
 
+  // 路由分发：图片走代理，HTML 走抓取
   if (url.pathname.startsWith('/_img_proxy_/')) {
     return proxyImage(url)
   }
@@ -31,61 +27,60 @@ export default async function handler(req: Request) {
 }
 
 /* ======== HTML 代理 ======== */
-
-async function proxyHtml(url: URL) {
+async function proxyHtml(url) {
   const targetUrl = `https://${SITE.host}${url.pathname}${url.search}`
 
   const res = await fetch(targetUrl, {
     headers: {
-      host: SITE.host,
-      referer: SITE.referer,
-      cookie: '' // 永远禁用用户态
+      'host': SITE.host,
+      'referer': SITE.referer,
+      'cookie': '' // 【书源思维】永远不发送用户状态，确保存储的是干净的成品
     }
   })
 
   const headers = new Headers(res.headers)
 
-  // —— 强制缓存确定性 —— //
-  headers.delete('set-cookie')
-  headers.delete('vary')
+  // —— 解决 MISS 问题的关键逻辑 —— //
+  headers.delete('set-cookie') // 彻底杀掉 PHPSESSID，解除缓存限制
+  headers.delete('vary')       // 移除 Vary 头，防止因用户代理不同导致缓存失效
+  headers.delete('pragma')
   headers.set('cache-control', SITE.cache.html)
 
-  // 非 HTML 不处理
+  // 非 HTML 资源不处理
   if (!headers.get('content-type')?.includes('text/html')) {
     return new Response(res.body, { status: res.status, headers })
   }
 
   let html = await res.text()
 
+  // 【书源预处理】在服务器端把懒加载属性直接转成走代理的 src
   html = normalizeImages(html, url.host)
+  // 全局域名替换
   html = html.split(SITE.host).join(url.host)
 
   return new Response(html, { status: 200, headers })
 }
 
 /* ======== 图片代理 ======== */
-
-async function proxyImage(url: URL) {
+async function proxyImage(url) {
   const imgUrl = url.pathname.replace('/_img_proxy_/', 'https://')
 
   const res = await fetch(imgUrl, {
-    headers: { referer: SITE.referer }
+    headers: { 'referer': SITE.referer }
   })
 
   const headers = new Headers(res.headers)
+  headers.delete('set-cookie') // 图片响应也不允许带 Cookie
   headers.set('cache-control', SITE.cache.image)
 
   return new Response(res.body, { headers })
 }
 
-/* ======== 图片书源化 ======== */
-
-function normalizeImages(html: string, myHost: string) {
+/* ======== 图片书源化逻辑 ======== */
+function normalizeImages(html, myHost) {
   const attrs = SITE.imageAttrs.join('|')
-  const reg = new RegExp(
-    `(${attrs})="https://([^"]+)"`,
-    'g'
-  )
+  // 匹配 data-src, data-original 等，强行转换为 src 代理地址
+  const reg = new RegExp(`(${attrs})="https://([^"]+)"`, 'g')
 
   return html.replace(reg, (_, __, path) =>
     `src="https://${myHost}/_img_proxy_/${path}"`
