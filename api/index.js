@@ -1,73 +1,88 @@
-export const config = { runtime: 'edge' }
+export const config = { runtime: 'edge' };
 
+/* ======== 站点核心配置 ======== */
 const SITE = {
   host: 'manwa.me',
   referer: 'https://manwa.me/',
   imageAttrs: ['data-src', 'data-original', 'src'],
   cache: {
+    // 页面成品在 Vercel 边缘节点缓存 2 小时
     html: 'public, s-maxage=7200, stale-while-revalidate=86400',
+    // 图片在边缘节点缓存 7 天
     image: 'public, s-maxage=604800, immutable'
   }
-}
+};
 
 export default async function handler(req) {
-  const url = new URL(req.url)
-  const myHost = url.host
+  const url = new URL(req.url);
+  const myHost = url.host;
 
+  // 1. 路由分发：处理图片代理（解决手机端 Pending 堵塞）
   if (url.pathname.startsWith('/_img_proxy_/')) {
-    return proxyImage(url)
+    return proxyImage(url);
   }
 
-  const targetUrl = `https://${SITE.host}${url.pathname}${url.search}`
+  // 2. 抓取目标 HTML（书源模式：不带任何 Cookie）
+  const targetUrl = `https://${SITE.host}${url.pathname}${url.search}`;
   const res = await fetch(targetUrl, {
     headers: {
       'host': SITE.host,
       'referer': SITE.referer,
-      'cookie': '' // 书源思维：请求时不带 cookie，确保存储的是公共成品
+      'cookie': '' // 彻底断开登录态，确保存储的是“公共成品”
     }
-  })
+  });
 
-  const headers = new Headers(res.headers)
+  const headers = new Headers(res.headers);
 
-  // —— 核心冲突处理：为了 HIT 缓存，我们必须删除 Set-Cookie —— //
-  // 如果你一定要保留登录功能，就无法实现“刷新第二次在内存读取”
-  headers.delete('set-cookie') 
-  headers.delete('vary')
-  headers.set('cache-control', SITE.cache.html)
+  // 3. 【核心优化】清除干扰缓存的所有标头，实现 100% HIT
+  headers.delete('set-cookie'); // 解决你截图中看到的 MISS 问题
+  headers.delete('vary');       // 防止因手机型号不同导致缓存失效
+  headers.delete('pragma');
+  headers.set('cache-control', SITE.cache.html);
 
+  // 如果是非 HTML 资源，直接返回
   if (!headers.get('content-type')?.includes('text/html')) {
-    return new Response(res.body, { status: res.status, headers })
+    return new Response(res.body, { status: res.status, headers });
   }
 
-  let text = await res.text()
+  let text = await res.text();
 
-  // 1. 注入去广告 CSS
+  // 4. 【去广告注入】轻量化 CSS，减少手机 CPU 渲染负担
   const adShield = `
     <style>
-      a[href][target][rel][style], div.footer-float-icon, i.fas.fa-times, img.return-top,
-      img[src][loading], div:nth-of-type(1) > a > input, div:nth-of-type(2) > a > input,
-      div:nth-of-type(2) > div:nth-of-type(2) > div, div:nth-of-type(3) > a > input {
-        display: none !important; opacity: 0 !important; position: absolute !important; top: -9999px !important;
+      /* 隐藏广告容器和弹窗 */
+      a[href][target][rel][style], .footer-float-icon, i.fas.fa-times, 
+      img.return-top, div[style*="position: fixed"],
+      div:nth-of-type(1) > a > input, div:nth-of-type(2) > a > input { 
+        display: none !important; opacity: 0 !important; pointer-events: none !important; 
       }
-    </style>`
-  text = text.replace('</head>', `${adShield}</head>`)
+      /* 优化手机端图片排版 */
+      img { max-width: 100% !important; height: auto !important; }
+    </style>`;
+  text = text.replace('</head>', `${adShield}</head>`);
 
-  // 2. 图片成品化（书源思维：暴力破解懒加载）
-  const attrs = SITE.imageAttrs.join('|')
-  const reg = new RegExp(`(${attrs})="https://([^"]+)"`, 'g')
-  text = text.replace(reg, (_, __, path) => `src="https://${myHost}/_img_proxy_/${path}"`)
+  // 5. 【书源预处理】服务器端暴力破解懒加载，解决手机端图片排队问题
+  const attrs = SITE.imageAttrs.join('|');
+  const reg = new RegExp(`(${attrs})="https://([^"]+)"`, 'g');
+  text = text.replace(reg, (_, __, path) => `src="https://${myHost}/_img_proxy_/${path}"`);
 
-  // 3. 域名替换
-  text = text.split(SITE.host).join(myHost)
+  // 6. 全域名替换
+  const finalHtml = text.split(SITE.host).join(myHost);
 
-  return new Response(text, { status: 200, headers })
+  return new Response(finalHtml, { status: 200, headers });
 }
 
+/* ======== 图片代理函数 ======== */
 async function proxyImage(url) {
-  const imgUrl = url.pathname.replace('/_img_proxy_/', 'https://')
-  const res = await fetch(imgUrl, { headers: { 'referer': SITE.referer } })
-  const headers = new Headers(res.headers)
-  headers.delete('set-cookie')
-  headers.set('cache-control', SITE.cache.image)
-  return new Response(res.body, { headers })
+  const imgUrl = url.pathname.replace('/_img_proxy_/', 'https://');
+  const res = await fetch(imgUrl, {
+    headers: { 'referer': SITE.referer }
+  });
+
+  const headers = new Headers(res.headers);
+  // 确保图片也不会因为原站返回的 Set-Cookie 导致无法缓存
+  headers.delete('set-cookie');
+  headers.set('cache-control', SITE.cache.image);
+
+  return new Response(res.body, { headers });
 }
