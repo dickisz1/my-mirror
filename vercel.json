@@ -1,9 +1,9 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/proxy" }
+    { "source": "/(.*)", "destination": "/api/index" }
   ],
   "functions": {
-    "api/proxy.js": {
+    "api/*.js": {
       "runtime": "edge",
       "regions": ["hnd1"]
     }
