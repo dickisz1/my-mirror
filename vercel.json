@@ -1,11 +1,12 @@
 {
+  "version": 2,
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "functions": {
     "api/index.js": {
-      "runtime": "edge",
-      "regions": ["hnd1", "icn1", "sin1"] 
+      "memory": 1024,
+      "maxDuration": 10
     }
   }
 }
