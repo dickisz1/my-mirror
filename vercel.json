@@ -1,10 +1,16 @@
 {
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/api/index" }
+  "rewrites": [
+    {
+      "source": "/proxy/(.*)",
+      "destination": "/api/proxy?url=$1"
+    },
+    {
+      "source": "/app/(.*)",
+      "destination": "/app/$1"
+    }
   ],
   "functions": {
-    "api/index.ts": {
+    "api/*.js": {
       "runtime": "edge",
       "regions": ["hnd1"]
     }
