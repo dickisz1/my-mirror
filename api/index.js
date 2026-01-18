@@ -1,55 +1,98 @@
 export const config = { runtime: 'edge' };
 
-export default async function handler(req) {
-  const targetHost = "manwa.me";
-  const url = new URL(req.url);
-  const myHost = url.host;
+export const handler = async (req) => {
+  const targetHost = "manwa.me";
+  const url = new URL(req.url);
+  const myHost = url.host;
 
-  // 1. 处理图片代理（解决待处理卡顿）
-  if (url.pathname.startsWith('/_img_proxy_/')) {
-    const actualImageUrl = url.pathname.replace('/_img_proxy_/', 'https://');
-    const imgRes = await fetch(actualImageUrl, {
-      headers: { 'referer': `https://${targetHost}/` }
-    });
-    const imgHeaders = new Headers(imgRes.headers);
-    imgHeaders.set('Cache-Control', 'public, s-maxage=86400'); // 图片缓存一天
-    return new Response(imgRes.body, { headers: imgHeaders });
-  }
+  // --- 1. 全能代理转发 (让“红色”请求穿透 GFW) ---
+  // 匹配所有以 /_proxy_/ 开头的请求
+  if (url.pathname.startsWith('/_proxy_/')) {
+    const actualUrl = url.pathname.replace('/_proxy_/', 'https://') + url.search;
+    
+    // 这里就是“拦截”发生的地方：如果是已知的垃圾脚本，直接掐断
+    const blackList = ['popunder', 'chicken.gif', 'rum', 'jserror'];
+    if (blackList.some(item => actualUrl.includes(item))) {
+      return new Response('', { status: 204 }); // 拦截：直接返回“无内容”
+    }
 
-  // 2. 抓取 HTML（双向清除 Cookie 确保服务器缓存）
-  const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
-  const res = await fetch(targetUrl, {
-    headers: { 
-      'host': targetHost, 
-      'referer': `https://${targetHost}/`,
-      'cookie': '' // 【去程阻断】不向原站发送任何登录信息
-    }
-  });
+    try {
+      const proxyRes = await fetch(actualUrl, {
+        headers: {
+          'referer': `https://${targetHost}/`,
+          'user-agent': req.headers.get('user-agent'),
+        }
+      });
 
-  // 3. 准备成品响应头
-  const headers = new Headers(res.headers);
-  
-  // 【关键：清理回程所有干扰项】
-  headers.delete('Set-Cookie'); 
-  headers.delete('Pragma');
-  headers.delete('Vary'); // 有些 Vary 头会导致节点缓存失效
-  
-  // 强行设定服务器级长缓存：1小时成品存储
-  headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=600');
+      const newHeaders = new Headers(proxyRes.headers);
+      newHeaders.set('Access-Control-Allow-Origin', '*'); // 解决跨域报错
+      newHeaders.delete('content-security-policy'); // 移除源站安全限制
+      
+      return new Response(proxyRes.body, { 
+        status: proxyRes.status, 
+        headers: newHeaders 
+      });
+    } catch (e) {
+      return new Response('Proxy Error', { status: 502 });
+    }
+  }
 
-  if (headers.get('content-type')?.includes('text/html')) {
-    let text = await res.text();
-    
-    // 服务器端暴力替换 data-src
-    text = text.replace(/data-src="https:\/\//g, `src="https://${myHost}/_img_proxy_/`)
-               .replace(/data-original="https:\/\//g, `src="https://${myHost}/_img_proxy_/`)
-               .replace(/src="https:\/\/img\.manwa\.me/g, `src="https://${myHost}/_img_proxy_/img.manwa.me`);
-    
-    // 全局域名替换
-    text = text.split(targetHost).join(myHost);
-    
-    return new Response(text, { status: 200, headers });
-  }
+  // --- 2. 抓取 HTML 主体 ---
+  const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
+  const res = await fetch(targetUrl, {
+    headers: { 
+      'host': targetHost, 
+      'referer': `https://${targetHost}/`,
+      'cookie': '' 
+    }
+  });
 
-  return new Response(res.body, { status: res.status, headers });
-},
+  if (res.headers.get('content-type')?.includes('text/html')) {
+    let text = await res.text();
+
+    // --- 3. 核心逻辑：重写 HTML 中的资源路径 ---
+    
+    // A. 解决图片加载
+    text = text.replace(/data-src="https:\/\//g, `src="https://${myHost}/_proxy_/`)
+               .replace(/data-original="https:\/\//g, `src="https://${myHost}/_proxy_/`)
+               .replace(/src="https:\/\/img\.manwa\.me/g, `src="https://${myHost}/_proxy_/img.manwa.me`);
+
+    // B. 让 JS 脚本“穿透”：将所有的 <script src="https://..."> 替换为代理路径
+    // 这样浏览器就会去请求你的 Edge 节点，而不是直连被屏蔽的域名
+    text = text.replace(/<script[^>]*src="https:\/\/([^"]+)"/gi, (match, p1) => {
+      // 如果已经是你自己的域名则不换，否则全部走代理
+      if (p1.includes(myHost)) return match;
+      return match.replace(`https://${p1}`, `https://${myHost}/_proxy_/${p1}`);
+    });
+
+    // C. 针对你截图中红色的特定 XHR/API 请求进行劫持（如 venor.php）
+    // 通过在 HTML 末尾注入一小段 JS，拦截浏览器的 fetch/XMLHttpRequest 请求
+    const injectScript = `
+    <script>
+      (function() {
+        const originFetch = window.fetch;
+        window.fetch = function(url, options) {
+          if (typeof url === 'string' && url.includes('venor.php')) {
+            url = '/_proxy_/' + url.replace('https://', '');
+          }
+          return originFetch(url, options);
+        };
+      })();
+    </script>`;
+    text = text.replace('</body>', `${injectScript}</body>`);
+
+    // D. 全局域名替换
+    text = text.split(targetHost).join(myHost);
+
+    const headers = new Headers(res.headers);
+    headers.delete('Set-Cookie');
+    headers.set('Cache-Control', 'public, s-maxage=3600');
+    
+    return new Response(text, { status: 200, headers });
+  }
+
+  // 其他静态资源（CSS/直接访问的图片等）
+  return new Response(res.body, { status: res.status, headers: res.headers });
+};
+
+export default handler;
