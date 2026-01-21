@@ -3,34 +3,34 @@ export const config = { runtime: 'edge' };
 export default async function handler(req) {
   const targetHost = "manwa.me";
   const url = new URL(req.url);
-  const myHost = url.host; // 这里会自动获取你的 dickisz123.dpdns.org
+  // 关键：自动识别当前访问域名（无论是 vercel.app 还是你的 dpdns 域名）
+  const myHost = url.host; 
 
-  // --- 1. 深度拦截名单（拦截那些导致卡顿的红色请求） ---
+  // --- 1. 深度拦截名单（防止流氓脚本干扰） ---
   const blockList = [
-    'popunder1000.js', 'venor.php', 'chicken.gif', '/rum', 
-    'jserror', 'code.js', 'analytics', 'ads'
+    'popunder', 'venor.php', 'chicken.gif', '/rum', 
+    'jserror', 'code.js', 'analytics', 'ads', 'click'
   ];
-  if (blockList.some(item => url.pathname.includes(item) || url.search.includes(item))) {
-    return new Response('', { status: 204 }); // 直接掐断，不给加载机会
+  if (blockList.some(item => url.pathname.includes(item))) {
+    return new Response('', { status: 204 });
   }
 
-  // --- 2. 资源代理中转（穿透墙，加载图片和脚本） ---
+  // --- 2. 资源代理中转（解决图片加载 403 问题的核心） ---
   if (url.pathname.startsWith('/_proxy_/')) {
-    // 还原真实的远程 URL
     const actualUrl = url.pathname.replace('/_proxy_/', 'https://') + url.search;
     
     try {
       const proxyRes = await fetch(actualUrl, {
         headers: {
           'referer': `https://${targetHost}/`,
-          'user-agent': req.headers.get('user-agent')
+          'user-agent': req.headers.get('user-agent') || 'Mozilla/5.0 (Linux; Android 10)'
         }
       });
 
       const newHeaders = new Headers(proxyRes.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*'); // 允许跨域，防止报错
+      newHeaders.set('Access-Control-Allow-Origin', '*'); 
       newHeaders.delete('content-security-policy');
-      newHeaders.set('Cache-Control', 'public, max-age=86400'); // 缓存一天，省流量
+      newHeaders.set('Cache-Control', 'public, max-age=86400'); // 缓存图片，加速显示
 
       return new Response(proxyRes.body, { status: proxyRes.status, headers: newHeaders });
     } catch (e) {
@@ -38,64 +38,70 @@ export default async function handler(req) {
     }
   }
 
-  // --- 3. HTML 抓取与深度重写 ---
+  // --- 3. 核心抓取逻辑 ---
+  // 构造发往主站的真实地址
   const targetUrl = `https://${targetHost}${url.pathname}${url.search}`;
-  const res = await fetch(targetUrl, {
-    headers: { 
-      'host': targetHost, 
-      'referer': `https://${targetHost}/`,
-      'cookie': '', // 匿名访问
-      'user-agent': req.headers.get('user-agent')
-    }
-  });
-
-  if (res.headers.get('content-type')?.includes('text/html')) {
-    let text = await res.text();
-
-    // A. 暴力替换：将所有 manwa.me 的资源链接重写为走你的代理
-    // 匹配 https://...manwa.me... 并强制加上你的代理前缀
-    text = text.replace(/https:\/\/([a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+)/g, (match, domain) => {
-      if (domain.includes(targetHost) || domain.includes('img.manwa')) {
-        return `https://${myHost}/_proxy_/${domain}`;
+  
+  try {
+    const res = await fetch(targetUrl, {
+      headers: { 
+        'host': targetHost, 
+        'referer': `https://${targetHost}/`,
+        'user-agent': req.headers.get('user-agent') || 'Mozilla/5.0 (Linux; Android 10)'
       }
-      return match;
     });
 
-    // B. 处理特殊的懒加载属性
-    text = text.replace(/data-src="/g, 'src="')
-               .replace(/data-original="/g, 'src="');
+    // 如果是 HTML 页面，进行“换脸”处理
+    if (res.headers.get('content-type')?.includes('text/html')) {
+      let text = await res.text();
 
-    // C. 注入 JS 脚本：在浏览器端也强制劫持动态发出的 AJAX 请求
-    const injectCode = `
-    <script>
-      (function() {
-        // 1. 劫持 Fetch
-        const originalFetch = window.fetch;
-        window.fetch = function(url, options) {
-          if (typeof url === 'string' && url.includes('${targetHost}')) {
-            url = '/_proxy_/' + url.replace('https://', '');
-          }
-          return originalFetch(url, options);
-        };
-        // 2. 隐藏可能的广告位
-        const style = document.createElement('style');
-        style.innerHTML = '.ad-box, #popunder { display:none !important; }';
-        document.head.appendChild(style);
-      })();
-    </script>
-    `;
-    text = text.replace('</head>', `${injectCode}</head>`);
+      // A. 域名全局替换：把网页里所有的 manwa.me 换成你的域名，防止点击后跳回原站
+      text = text.split(targetHost).join(myHost);
 
-    // D. 全局替换域名，确保点击链接不跳走
-    text = text.split(targetHost).join(myHost);
+      // B. 资源路径劫持：把所有图片/脚本路径重定向到我们的代理接口
+      // 匹配 https://...img.manwa... 等资源
+      text = text.replace(/https:\/\/([a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+)/g, (match, domain) => {
+        if (domain.includes('manwa') || domain.includes('img')) {
+          return `https://${myHost}/_proxy_/${domain}`;
+        }
+        return match;
+      });
 
-    const headers = new Headers(res.headers);
-    headers.delete('Set-Cookie');
-    headers.set('Cache-Control', 'no-cache');
+      // C. 强力修复懒加载：把 data-src 直接换成 src，确保漫画能直接显示
+      text = text.replace(/data-src=/g, 'src=')
+                 .replace(/data-original=/g, 'src=');
 
-    return new Response(text, { status: 200, headers });
+      // D. 注入客户端脚本：防止浏览器端的 JS 自动跳转
+      const injectCode = `
+      <script>
+        (function() {
+          // 劫持所有的动态跳转
+          window.onbeforeunload = function() { return null; };
+          // 劫持 Fetch 请求
+          const oldFetch = window.fetch;
+          window.fetch = function(u, o) {
+            if (typeof u === 'string' && u.includes('manwa')) {
+              u = '/_proxy_/' + u.replace('https://', '');
+            }
+            return oldFetch(u, o);
+          };
+        })();
+      </script>
+      `;
+      text = text.replace('</head>', `${injectCode}</head>`);
+
+      const headers = new Headers(res.headers);
+      headers.delete('Set-Cookie'); // 保持匿名
+      headers.set('Content-Type', 'text/html; charset=utf-8');
+
+      return new Response(text, { status: 200, headers });
+    }
+
+    // 非 HTML 资源（CSS/JS）直接返回
+    return new Response(res.body, { status: res.status, headers: res.headers });
+
+  } catch (error) {
+    // 如果抓取主站失败，返回错误而非跳转 Google
+    return new Response("代理中转失败，请检查主站是否在线: " + error.message, { status: 500 });
   }
-
-  // 其他静态资源（CSS等）直接返回
-  return new Response(res.body, { status: res.status, headers: res.headers });
 }
