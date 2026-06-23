@@ -67,8 +67,15 @@ export default async function handler(req) {
         }
       </style>`;
 
-      // 将去广告规则注入到 head
-      text = text.replace('</head>', `${adShield}</head>`);
+      // 5. 注入 Vercel Speed Insights
+      const speedInsights = `
+      <script>
+        window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+      </script>
+      <script defer src="/_vercel/speed-insights/script.js"></script>`;
+
+      // 将去广告规则和 Speed Insights 注入到 head
+      text = text.replace('</head>', `${adShield}${speedInsights}</head>`);
 
       return new Response(text.split(targetHost).join(myHost), {
         status: response.status,
@@ -76,7 +83,7 @@ export default async function handler(req) {
       });
     }
 
-    // 5. 非 HTML 内容（如图片）也取消缓存，直接返回
+    // 6. 非 HTML 内容（如图片）也取消缓存，直接返回
     return new Response(response.body, {
       status: response.status,
       headers: resHeaders
