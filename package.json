@@ -1,0 +1,16 @@
+{
+  "name": "my-mirror",
+  "version": "1.0.0",
+  "description": "Vercel Edge Proxy with Speed Insights",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy"
+  },
+  "dependencies": {
+    "@vercel/speed-insights": "^1.0.12"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
