@@ -31,17 +31,32 @@ export default async function handler(req) {
   });
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时,别让死链接卡住队列
+
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: newHeaders,
-      redirect: 'manual'
+      redirect: 'manual',
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     const resHeaders = new Headers();
     response.headers.forEach((v, k) => resHeaders.set(k, v));
 
-    resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
-    resHeaders.set('Pragma', 'no-cache');
+    const contentTypeForCache = resHeaders.get('content-type') || '';
+    const isStaticAsset = /image|font|javascript|css/.test(contentTypeForCache);
+
+    if (isStaticAsset) {
+      // 静态资源:允许浏览器和 Vercel 边缘节点长期缓存,大幅提速
+      // 文件名带 ?v= 版本号的话,内容变了链接也会变,所以长缓存很安全
+      resHeaders.set('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400');
+    } else {
+      // 只有 HTML 主文档需要每次都拿最新内容(因为要动态注入去广告CSS)
+      resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
+      resHeaders.set('Pragma', 'no-cache');
+    }
 
     const setCookies = response.headers.getSetCookie();
     resHeaders.delete('set-cookie');
@@ -76,6 +91,82 @@ export default async function handler(req) {
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
 
+      // === 新增:自动加载下一章脚本,实现无缝阅读 ===
+      const autoLoadScript = `
+      <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        var nextLink = document.querySelector('a.view-fix-bottom-bar-item-menu-next');
+        var container = document.querySelector('#cp_img.view-main-1');
+        if (!nextLink || !container) return;
+
+        var loading = false;
+        var sentinel = document.createElement('div');
+        sentinel.id = '__auto_load_sentinel__';
+        sentinel.style.height = '1px';
+        container.parentNode.insertBefore(sentinel, container.nextSibling);
+
+        function loadNextChapter() {
+          if (loading) return;
+          var href = nextLink.getAttribute('href');
+          if (!href || href === 'javascript:;' || href === '#') return;
+          loading = true;
+
+          fetch(href, { credentials: 'same-origin' })
+            .then(function(res){ return res.text(); })
+            .then(function(html){
+              var parser = new DOMParser();
+              var doc = parser.parseFromString(html, 'text/html');
+              var nextContainer = doc.querySelector('#cp_img.view-main-1');
+              var nextNextLink = doc.querySelector('a.view-fix-bottom-bar-item-menu-next');
+
+              if (nextContainer) {
+                var divider = document.createElement('div');
+                divider.textContent = '— 已自动加载下一章 —';
+                divider.style.textAlign = 'center';
+                divider.style.color = '#999';
+                divider.style.padding = '16px 0';
+                container.appendChild(divider);
+
+                var imgs = nextContainer.querySelectorAll('img.lazy_img, img.content-img');
+                imgs.forEach(function(img){
+                  var real = img.getAttribute('data-original') || img.getAttribute('src');
+                  if (!real || real.indexOf('blob:') === 0) return;
+                  var newImg = document.createElement('img');
+                  newImg.src = real;
+                  newImg.className = 'content-img auto-loaded-img';
+                  newImg.style.display = 'block';
+                  newImg.style.width = '100%';
+                  container.appendChild(newImg);
+                });
+              }
+
+              if (nextNextLink) {
+                nextLink.setAttribute('href', nextNextLink.getAttribute('href'));
+              } else {
+                nextLink.setAttribute('href', '');
+              }
+              history.pushState(null, '', href);
+
+              container.parentNode.insertBefore(sentinel, container.nextSibling);
+              loading = false;
+            })
+            .catch(function(err){
+              console.error('自动加载下一章失败:', err);
+              loading = false;
+            });
+        }
+
+        var observer = new IntersectionObserver(function(entries){
+          entries.forEach(function(entry){
+            if (entry.isIntersecting) loadNextChapter();
+          });
+        }, { rootMargin: '600px' });
+
+        observer.observe(sentinel);
+      });
+      </script>`;
+      text = text.replace('</body>', `${autoLoadScript}</body>`);
+
       // === 新增:把 HTML 里所有指向图片域名的链接,改写成走我们自己的 /__assets__ 前缀 ===
       text = text
         .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
@@ -95,6 +186,19 @@ export default async function handler(req) {
         .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
         .split(`//${ASSET_HOST}`).join(`//${myHost}${ASSET_PREFIX}`);
       return new Response(css, {
+        status: response.status,
+        headers: resHeaders
+      });
+    }
+
+    // JS 文件里有时会硬编码图片真实域名(比如章节数据脚本),同样需要替换
+    if (contentTypeForCache.includes('javascript')) {
+      let js = await response.text();
+      js = js
+        .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
+        .split(`//${ASSET_HOST}`).join(`//${myHost}${ASSET_PREFIX}`)
+        .split(targetHost).join(myHost);
+      return new Response(js, {
         status: response.status,
         headers: resHeaders
       });
