@@ -149,8 +149,11 @@ export default async function handler(req) {
                   var newImg = document.createElement('img');
                   newImg.src = real;
                   newImg.className = 'content-img auto-loaded-img';
+                  newImg.loading = 'lazy'; // 原生懒加载,避免41张图同时抢网络连接
                   newImg.style.display = 'block';
                   newImg.style.width = '100%';
+                  newImg.style.minHeight = '400px'; // 图片没下载完时先占住高度,避免被压成细线
+                  newImg.style.backgroundColor = '#f0f0f0'; // 占位时给个浅灰背景,过渡更自然
                   container.appendChild(newImg);
                 });
               }
