@@ -43,12 +43,32 @@ export default async function handler(req) {
     if (/image|font|javascript|css/.test(contentType)) {
       resHeaders.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
     } else {
-      resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+      resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
+      resHeaders.set('Pragma', 'no-cache');
     }
 
     // 4. 内容处理
     if (contentType.includes('text/html') || contentType.includes('javascript') || contentType.includes('text/css')) {
       let text = await response.text();
+
+      const adShield = `
+      <style>
+        a[href][target][rel][style],
+        div.footer-float-icon,
+        i.fas.fa-times,
+        img.return-top,
+        img[src][loading],
+        div:nth-of-type(1) > a > input,
+        div:nth-of-type(2) > a > input,
+        div:nth-of-type(2) > div:nth-of-type(2) > div,
+        div:nth-of-type(3) > a > input {
+          display: none !important;
+          opacity: 0 !important;
+          position: absolute !important;
+          top: -9999px !important;
+        }
+      </style>`;
+      text = text.replace('</head>', `${adShield}</head>`);
 
       // 翻译清单：把所有原站链接翻译成你的代理链接
       const replacements = [
