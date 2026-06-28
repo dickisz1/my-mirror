@@ -111,6 +111,15 @@ export default async function handler(req) {
           if (!href || href === 'javascript:;' || href === '#') return;
           loading = true;
 
+          // 立刻插入"加载中"提示,给用户视觉反馈,避免滚动到底后空白卡住
+          var loadingTip = document.createElement('div');
+          loadingTip.id = '__loading_tip__';
+          loadingTip.style.textAlign = 'center';
+          loadingTip.style.padding = '24px 0';
+          loadingTip.style.color = '#999';
+          loadingTip.innerHTML = '<div style="display:inline-block;width:20px;height:20px;border:2px solid #ddd;border-top-color:#666;border-radius:50%;animation:__spin__ 0.8s linear infinite;"></div><div style="margin-top:8px;">正在加载下一章...</div><style>@keyframes __spin__{to{transform:rotate(360deg);}}</style>';
+          container.appendChild(loadingTip);
+
           // 用隐藏 iframe 加载下一章,让它的 JS 真正执行,
           // 这样懒加载逻辑才会把真实图片地址换进去(而不是占位图)
           var iframe = document.createElement('iframe');
@@ -130,6 +139,9 @@ export default async function handler(req) {
           function finish() {
             if (settled) return;
             settled = true;
+
+            var tip = document.getElementById('__loading_tip__');
+            if (tip) tip.remove();
 
             try {
               var idoc = iframe.contentDocument;
@@ -180,7 +192,7 @@ export default async function handler(req) {
           iframe.onload = function() {
             // 给页面JS留出时间执行懒加载替换逻辑,1.5秒后再去读取结果
             // 如果发现图片还是没换成真实地址,可以把这个数字调大试试
-            setTimeout(finish, 4000);
+            setTimeout(finish, 1500);
           };
 
           // 兜底:如果 iframe 一直不触发 onload(网络问题等),8秒后强制结束,避免卡死
@@ -191,7 +203,7 @@ export default async function handler(req) {
           entries.forEach(function(entry){
             if (entry.isIntersecting) loadNextChapter();
           });
-        }, { rootMargin: '600px' });
+        }, { rootMargin: '1500px' });
 
         observer.observe(sentinel);
       });
