@@ -180,7 +180,7 @@ export default async function handler(req) {
           iframe.onload = function() {
             // 给页面JS留出时间执行懒加载替换逻辑,1.5秒后再去读取结果
             // 如果发现图片还是没换成真实地址,可以把这个数字调大试试
-            setTimeout(finish, 1500);
+            setTimeout(finish, 4000);
           };
 
           // 兜底:如果 iframe 一直不触发 onload(网络问题等),8秒后强制结束,避免卡死
