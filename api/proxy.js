@@ -111,13 +111,30 @@ export default async function handler(req) {
           if (!href || href === 'javascript:;' || href === '#') return;
           loading = true;
 
-          fetch(href, { credentials: 'same-origin' })
-            .then(function(res){ return res.text(); })
-            .then(function(html){
-              var parser = new DOMParser();
-              var doc = parser.parseFromString(html, 'text/html');
-              var nextContainer = doc.querySelector('#cp_img.view-main-1');
-              var nextNextLink = doc.querySelector('a.view-fix-bottom-bar-item-menu-next');
+          // 用隐藏 iframe 加载下一章,让它的 JS 真正执行,
+          // 这样懒加载逻辑才会把真实图片地址换进去(而不是占位图)
+          var iframe = document.createElement('iframe');
+          iframe.style.position = 'fixed';
+          iframe.style.left = '-99999px';
+          iframe.style.top = '0';
+          iframe.style.width = '800px';
+          // 故意给一个超大高度,让所有图片"一开始就在可视区域内",
+          // 这样依赖 IntersectionObserver 的懒加载库会一次性把所有图片都加载出来,
+          // 不需要我们模拟滚动
+          iframe.style.height = '30000px';
+          iframe.style.border = 'none';
+          iframe.src = href;
+          document.body.appendChild(iframe);
+
+          var settled = false;
+          function finish() {
+            if (settled) return;
+            settled = true;
+
+            try {
+              var idoc = iframe.contentDocument;
+              var nextContainer = idoc.querySelector('#cp_img.view-main-1');
+              var nextNextLink = idoc.querySelector('a.view-fix-bottom-bar-item-menu-next');
 
               if (nextContainer) {
                 var divider = document.createElement('div');
@@ -127,9 +144,14 @@ export default async function handler(req) {
                 divider.style.padding = '16px 0';
                 container.appendChild(divider);
 
-                var imgs = nextContainer.querySelectorAll('img.lazy_img, img.content-img');
+                var imgs = nextContainer.querySelectorAll('img.content-img');
                 imgs.forEach(function(img){
-                  var real = img.getAttribute('data-original') || img.getAttribute('src');
+                  // 优先取真正生效的 src(JS跑完后应该已经是真实地址),
+                  // 如果还是占位图/blob,再退而取 data-original
+                  var real = img.src;
+                  if (!real || real.indexOf('blob:') === 0 || real.indexOf('imagecover3') !== -1) {
+                    real = img.getAttribute('data-original') || real;
+                  }
                   if (!real || real.indexOf('blob:') === 0) return;
                   var newImg = document.createElement('img');
                   newImg.src = real;
@@ -146,14 +168,23 @@ export default async function handler(req) {
                 nextLink.setAttribute('href', '');
               }
               history.pushState(null, '', href);
+            } catch (e) {
+              console.error('读取下一章iframe内容失败:', e);
+            }
 
-              container.parentNode.insertBefore(sentinel, container.nextSibling);
-              loading = false;
-            })
-            .catch(function(err){
-              console.error('自动加载下一章失败:', err);
-              loading = false;
-            });
+            document.body.removeChild(iframe);
+            container.parentNode.insertBefore(sentinel, container.nextSibling);
+            loading = false;
+          }
+
+          iframe.onload = function() {
+            // 给页面JS留出时间执行懒加载替换逻辑,1.5秒后再去读取结果
+            // 如果发现图片还是没换成真实地址,可以把这个数字调大试试
+            setTimeout(finish, 1500);
+          };
+
+          // 兜底:如果 iframe 一直不触发 onload(网络问题等),8秒后强制结束,避免卡死
+          setTimeout(finish, 8000);
         }
 
         var observer = new IntersectionObserver(function(entries){
