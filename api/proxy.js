@@ -78,7 +78,7 @@ export default async function handler(req) {
         div.footer-float-icon,
         i.fas.fa-times,
         img.return-top,
-        img[src][loading],
+        img[src][loading]:not(.auto-loaded-img),
         div:nth-of-type(1) > a > input,
         div:nth-of-type(2) > a > input,
         div:nth-of-type(2) > div:nth-of-type(2) > div,
