@@ -141,20 +141,57 @@ export default async function handler(req) {
                 divider.style.padding = '16px 0';
                 container.appendChild(divider);
 
+                // 图片数据是 AES-CBC 加密过的,密钥和IV都是 "my2ecret782ecret"(16字节)
+                // 必须先解密成真实字节,才能当图片显示,不能直接拿地址当src用
+                var __aesKeyPromise = null;
+                function getAesKey() {
+                  if (!__aesKeyPromise) {
+                    var keyBytes = new TextEncoder().encode('my2ecret782ecret');
+                    __aesKeyPromise = crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
+                  }
+                  return __aesKeyPromise;
+                }
+                function decryptImageToBlobUrl(url) {
+                  var ivBytes = new TextEncoder().encode('my2ecret782ecret');
+                  return getAesKey()
+                    .then(function(key){ return fetch(url).then(function(res){ return res.arrayBuffer().then(function(buf){ return [key, buf]; }); }); })
+                    .then(function(pair){ return crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, pair[0], pair[1]); })
+                    .then(function(decryptedBuf){
+                      var blob = new Blob([decryptedBuf], { type: 'image/webp' });
+                      return URL.createObjectURL(blob);
+                    });
+                }
+
+                // 用 IntersectionObserver 实现"真正按需"懒加载:
+                // 图片标签先占位插入,只有滚动到附近才去发请求+解密,避免一次性大量请求
+                var __lazyDecryptObserver = new IntersectionObserver(function(entries, obs){
+                  entries.forEach(function(entry){
+                    if (!entry.isIntersecting) return;
+                    var imgEl = entry.target;
+                    var url = imgEl.getAttribute('data-real-url');
+                    obs.unobserve(imgEl);
+                    decryptImageToBlobUrl(url).then(function(blobUrl){
+                      imgEl.src = blobUrl;
+                    }).catch(function(err){
+                      console.error('图片解密失败:', err);
+                    });
+                  });
+                }, { rootMargin: '300px' });
+
                 var imgs = nextContainer.querySelectorAll('img.content-img');
                 imgs.forEach(function(img){
                   // 真正的完整图片地址在 data-r-src 里,不是 data-original
                   var real = img.getAttribute('data-r-src');
                   if (!real || real.indexOf('blob:') === 0) return;
                   var newImg = document.createElement('img');
-                  newImg.src = real;
+                  newImg.setAttribute('data-real-url', real);
                   newImg.className = 'content-img auto-loaded-img';
-                  newImg.loading = 'lazy'; // 原生懒加载,避免41张图同时抢网络连接
                   newImg.style.display = 'block';
                   newImg.style.width = '100%';
                   newImg.style.minHeight = '400px'; // 图片没下载完时先占住高度,避免被压成细线
                   newImg.style.backgroundColor = '#f0f0f0'; // 占位时给个浅灰背景,过渡更自然
                   container.appendChild(newImg);
+                  __lazyDecryptObserver.observe(newImg);
                 });
               }
 
