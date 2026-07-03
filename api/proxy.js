@@ -220,6 +220,128 @@ export default async function handler(req) {
         }, { rootMargin: '1500px' });
 
         observer.observe(sentinel);
+
+        // ===== 自动滚屏功能 =====
+        var scrollTimer = null;
+        var scrollSpeed = 1; // 默认慢速,单位px/帧
+        var isScrolling = false;
+
+        // 创建悬浮控制面板
+        var panel = document.createElement('div');
+        panel.id = '__scroll_panel__';
+        panel.style.cssText = [
+          'position:fixed',
+          'bottom:80px',
+          'right:12px',
+          'z-index:999998',
+          'display:flex',
+          'flex-direction:column',
+          'align-items:center',
+          'gap:6px',
+          'background:rgba(0,0,0,0.55)',
+          'border-radius:20px',
+          'padding:10px 8px',
+          'backdrop-filter:blur(4px)',
+          '-webkit-backdrop-filter:blur(4px)',
+        ].join(';');
+
+        function makeBtn(label, title) {
+          var b = document.createElement('button');
+          b.textContent = label;
+          b.title = title;
+          b.style.cssText = [
+            'width:36px',
+            'height:36px',
+            'border-radius:50%',
+            'border:none',
+            'background:rgba(255,255,255,0.18)',
+            'color:#fff',
+            'font-size:16px',
+            'line-height:1',
+            'cursor:pointer',
+            'display:flex',
+            'align-items:center',
+            'justify-content:center',
+            'transition:background 0.2s',
+          ].join(';');
+          b.onmouseenter = function(){ b.style.background = 'rgba(255,255,255,0.35)'; };
+          b.onmouseleave = function(){ b.style.background = 'rgba(255,255,255,0.18)'; };
+          return b;
+        }
+
+        var btnFaster  = makeBtn('▲', '加速');
+        var btnToggle  = makeBtn('▶', '开始/暂停');
+        var btnSlower  = makeBtn('▼', '减速');
+
+        var speedLabel = document.createElement('div');
+        speedLabel.style.cssText = 'color:#fff;font-size:11px;text-align:center;line-height:1.4;';
+        speedLabel.textContent = '慢速';
+
+        panel.appendChild(btnFaster);
+        panel.appendChild(btnToggle);
+        panel.appendChild(btnSlower);
+        panel.appendChild(speedLabel);
+        document.body.appendChild(panel);
+
+        // 速度档位:像素/帧(requestAnimationFrame 约60fps)
+        var speedLevels = [0.3, 0.6, 1, 1.8, 3];
+        var speedNames  = ['极慢', '慢速', '中速', '快速', '极快'];
+        var speedIndex  = 1; // 默认"慢速"
+
+        function applySpeed() {
+          scrollSpeed = speedLevels[speedIndex];
+          speedLabel.textContent = speedNames[speedIndex];
+        }
+        applySpeed();
+
+        function doScroll() {
+          if (!isScrolling) return;
+          window.scrollBy(0, scrollSpeed);
+          scrollTimer = requestAnimationFrame(doScroll);
+        }
+
+        function startScroll() {
+          isScrolling = true;
+          btnToggle.textContent = '⏸';
+          scrollTimer = requestAnimationFrame(doScroll);
+        }
+
+        function stopScroll() {
+          isScrolling = false;
+          btnToggle.textContent = '▶';
+          if (scrollTimer) { cancelAnimationFrame(scrollTimer); scrollTimer = null; }
+        }
+
+        btnToggle.addEventListener('click', function(e){
+          e.stopPropagation();
+          if (isScrolling) stopScroll(); else startScroll();
+        });
+
+        btnFaster.addEventListener('click', function(e){
+          e.stopPropagation();
+          if (speedIndex < speedLevels.length - 1) { speedIndex++; applySpeed(); }
+        });
+
+        btnSlower.addEventListener('click', function(e){
+          e.stopPropagation();
+          if (speedIndex > 0) { speedIndex--; applySpeed(); }
+        });
+
+        // 点击漫画区域切换暂停/继续(方便手机用户不用够右下角)
+        var comicArea = document.querySelector('#cp_img');
+        if (comicArea) {
+          comicArea.addEventListener('click', function(){
+            if (isScrolling) stopScroll(); else startScroll();
+          });
+        }
+
+        // 滚动到页面最底部时自动停止
+        window.addEventListener('scroll', function(){
+          if (!isScrolling) return;
+          var atBottom = (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 10;
+          if (atBottom) stopScroll();
+        }, { passive: true });
+
       });
       </script>`;
       text = text.replace('</body>', `${autoLoadScript}</body>`);
