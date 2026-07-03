@@ -256,6 +256,27 @@ export default async function handler(req) {
         panel.appendChild(btnSlower);
         panel.appendChild(speedLabel);
 
+        // 自动隐藏:3秒无操作后变透明,触摸/移动鼠标恢复显示
+        panel.style.transition = 'opacity 0.4s';
+        var hideTimer = null;
+        function showPanel(){
+          panel.style.opacity = '1';
+          panel.style.pointerEvents = 'auto';
+          clearTimeout(hideTimer);
+          hideTimer = setTimeout(function(){
+            panel.style.opacity = '0.08';
+            panel.style.pointerEvents = 'none'; // 透明时不拦截点击穿透
+          }, 3000);
+        }
+        // 触摸、鼠标移动、点击都会唤醒
+        ['touchstart','touchmove','mousemove','click'].forEach(function(evt){
+          document.addEventListener(evt, showPanel, { passive: true });
+        });
+        // 悬停在面板上时保持显示
+        panel.addEventListener('mouseenter', function(){ clearTimeout(hideTimer); panel.style.opacity='1'; });
+        panel.addEventListener('mouseleave', showPanel);
+        showPanel(); // 初始化:先显示一次,3秒后自动隐藏
+
         function doScroll(){
           if (!window.__isScrolling) return;
           window.scrollBy(0, window.__scrollSpeed);
