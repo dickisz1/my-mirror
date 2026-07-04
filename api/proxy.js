@@ -242,8 +242,9 @@ export default async function handler(req) {
       (function(){
         if (window.innerWidth <= 600) return;
         function applyWide(){
-          document.body.style.setProperty('max-width','100%','important');
+          document.body.style.setProperty('max-width','800px','important');
           document.body.style.setProperty('width','100%','important');
+          document.body.style.setProperty('margin','0 auto','important');
           var mc = document.querySelector('.main-content');
           if (mc){
             mc.style.setProperty('max-width','100%','important');
