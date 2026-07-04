@@ -303,38 +303,60 @@ export default async function handler(req) {
         btnRotate.addEventListener('click', function(e){
           e.stopPropagation();
           window.__rotated = !window.__rotated;
-          btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
-          rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
-          applyRotation(window.__rotated);
+          btnRotate.textContent = '⏳';
+          rotateLabel.textContent = '处理中';
+          btnRotate.style.pointerEvents = 'none';
+
+          var imgs = Array.from(document.querySelectorAll('img.content-img'));
+
+          // 先强制触发所有未加载图片加载
+          imgs.forEach(function(img){
+            if (img.src.startsWith('blob:') && img.naturalWidth === 0){
+              // 强制触发加载:临时设一下src
+              var s = img.src;
+              img.src = '';
+              img.src = s;
+            }
+          });
+
+          // 等所有图片都ready(最多等8秒)
+          var deadline = Date.now() + 8000;
+          function waitAll(){
+            var pending = imgs.filter(function(img){ return !img.complete || img.naturalWidth === 0; });
+            if (pending.length === 0 || Date.now() > deadline){
+              applyRotation(window.__rotated, imgs);
+              btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
+              rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
+              btnRotate.style.pointerEvents = 'auto';
+            } else {
+              setTimeout(waitAll, 200);
+            }
+          }
+          waitAll();
         });
 
-        function applyRotation(rotated){
-          var imgs = document.querySelectorAll('img.content-img');
+        function applyRotation(rotated, imgs){
           imgs.forEach(function(img){
             if (rotated){
-              // 等图片真正加载完再旋转
-              function doRotate(){
-                if (!img.naturalWidth) return;
-                var w = img.naturalWidth, h = img.naturalHeight;
-                var canvas = document.createElement('canvas');
-                canvas.width = h; canvas.height = w;
-                var ctx = canvas.getContext('2d');
-                ctx.translate(h/2, w/2);
-                ctx.rotate(Math.PI/2);
-                ctx.drawImage(img, -w/2, -h/2, w, h);
-                img.src = canvas.toDataURL('image/webp');
-                img.style.width = '100%';
-                img.style.height = 'auto';
-                img.setAttribute('data-rotated','1');
-              }
-              if (img.complete && img.naturalWidth) doRotate();
-              else img.addEventListener('load', doRotate, {once:true});
+              if (!img.naturalWidth) return;
+              var w = img.naturalWidth, h = img.naturalHeight;
+              var canvas = document.createElement('canvas');
+              canvas.width = h; canvas.height = w;
+              var ctx = canvas.getContext('2d');
+              ctx.translate(h/2, w/2);
+              ctx.rotate(Math.PI/2);
+              ctx.drawImage(img, -w/2, -h/2, w, h);
+              img.setAttribute('data-orig-src', img.src);
+              img.src = canvas.toDataURL('image/jpeg', 0.92);
+              img.style.width = '100%';
+              img.style.height = 'auto';
+              img.setAttribute('data-rotated','1');
             } else {
-              // 还原:重新从data-r-src加载原图
-              var orig = img.getAttribute('data-r-src') || img.getAttribute('data-original');
+              var orig = img.getAttribute('data-orig-src');
               if (orig && img.getAttribute('data-rotated')){
                 img.src = orig;
                 img.removeAttribute('data-rotated');
+                img.removeAttribute('data-orig-src');
                 img.style.width = '100%';
                 img.style.height = 'auto';
               }
