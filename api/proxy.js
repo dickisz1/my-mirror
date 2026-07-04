@@ -313,6 +313,10 @@ export default async function handler(req) {
               function doRotate(){
                 if (!img.naturalWidth || !img.naturalHeight) return;
                 var w = img.naturalWidth, h = img.naturalHeight;
+                // 只旋转"正常漫画页"比例的图片:
+                // 高宽比在 1.2~4 之间才是正常竖版漫画页,跳过极端细长条/正方形/横图
+                var ratio = h / w;
+                if (ratio < 1.2 || ratio > 4) return;
                 var canvas = document.createElement('canvas');
                 canvas.width = h; canvas.height = w;
                 var ctx = canvas.getContext('2d');
