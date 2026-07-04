@@ -303,57 +303,39 @@ export default async function handler(req) {
         btnRotate.addEventListener('click', function(e){
           e.stopPropagation();
           window.__rotated = !window.__rotated;
-          btnRotate.textContent = '⏳';
-          rotateLabel.textContent = '处理中';
-          btnRotate.style.pointerEvents = 'none';
+          btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
+          rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
 
           var imgs = Array.from(document.querySelectorAll('img.content-img'));
-
-          // 先强制触发所有未加载图片加载
           imgs.forEach(function(img){
-            if (img.src.startsWith('blob:') && img.naturalWidth === 0){
-              // 强制触发加载:临时设一下src
-              var s = img.src;
-              img.src = '';
-              img.src = s;
-            }
-          });
-
-          // 等所有图片都ready(最多等8秒)
-          var deadline = Date.now() + 8000;
-          function waitAll(){
-            var pending = imgs.filter(function(img){ return !img.complete || img.naturalWidth === 0; });
-            if (pending.length === 0 || Date.now() > deadline){
-              applyRotation(window.__rotated, imgs);
-              btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
-              rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
-              btnRotate.style.pointerEvents = 'auto';
+            if (window.__rotated){
+              if (img.getAttribute('data-rotated')) return; // 已旋转过跳过
+              function doRotate(){
+                if (!img.naturalWidth || !img.naturalHeight) return;
+                var w = img.naturalWidth, h = img.naturalHeight;
+                var canvas = document.createElement('canvas');
+                canvas.width = h; canvas.height = w;
+                var ctx = canvas.getContext('2d');
+                ctx.translate(h/2, w/2);
+                ctx.rotate(Math.PI/2);
+                ctx.drawImage(img, -w/2, -h/2, w, h);
+                img.setAttribute('data-orig-src', img.src);
+                img.src = canvas.toDataURL('image/jpeg', 0.92);
+                img.style.width = '100%';
+                img.style.height = 'auto';
+                img.setAttribute('data-rotated', '1');
+              }
+              // 已加载完:直接转
+              if (img.complete && img.naturalWidth > 0){
+                doRotate();
+              } else {
+                // 未加载完:监听load事件,加载完自动转
+                img.addEventListener('load', doRotate, { once: true });
+              }
             } else {
-              setTimeout(waitAll, 200);
-            }
-          }
-          waitAll();
-        });
-
-        function applyRotation(rotated, imgs){
-          imgs.forEach(function(img){
-            if (rotated){
-              if (!img.naturalWidth) return;
-              var w = img.naturalWidth, h = img.naturalHeight;
-              var canvas = document.createElement('canvas');
-              canvas.width = h; canvas.height = w;
-              var ctx = canvas.getContext('2d');
-              ctx.translate(h/2, w/2);
-              ctx.rotate(Math.PI/2);
-              ctx.drawImage(img, -w/2, -h/2, w, h);
-              img.setAttribute('data-orig-src', img.src);
-              img.src = canvas.toDataURL('image/jpeg', 0.92);
-              img.style.width = '100%';
-              img.style.height = 'auto';
-              img.setAttribute('data-rotated','1');
-            } else {
+              // 还原
               var orig = img.getAttribute('data-orig-src');
-              if (orig && img.getAttribute('data-rotated')){
+              if (orig){
                 img.src = orig;
                 img.removeAttribute('data-rotated');
                 img.removeAttribute('data-orig-src');
@@ -362,7 +344,7 @@ export default async function handler(req) {
               }
             }
           });
-        }
+        });
 
         // 自动隐藏:3秒无操作后变透明,触摸/移动鼠标恢复显示
         panel.style.transition = 'opacity 0.4s';
