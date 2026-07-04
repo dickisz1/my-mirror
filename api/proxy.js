@@ -238,6 +238,19 @@ export default async function handler(req) {
         observer.observe(sentinel);
       });
 
+      // ===== PC端宽屏适配:强制让页面随屏幕宽度伸展 =====
+      (function(){
+        if (window.innerWidth <= 600) return; // 手机端不处理
+        var style = document.createElement('style');
+        style.textContent = [
+          'body { max-width:100%!important; width:100%!important; }',
+          '.main-content { max-width:100%!important; width:100%!important; padding-left:0!important; padding-right:0!important; }',
+          '#cp_img.view-main-1 { max-width:100%!important; width:100%!important; }',
+          '#cp_img.view-main-1 img { width:100%!important; max-width:100%!important; image-orientation:none!important; }',
+        ].join('\n');
+        document.head.appendChild(style);
+      })();
+
       // ===== 自动滚屏功能 =====
       (function(){
         window.__scrollSpeed = 0.6;
