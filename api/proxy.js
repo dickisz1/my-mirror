@@ -303,35 +303,44 @@ export default async function handler(req) {
         btnRotate.addEventListener('click', function(e){
           e.stopPropagation();
           window.__rotated = !window.__rotated;
-          var imgs = document.querySelectorAll('img.content-img');
-          imgs.forEach(function(img){
-            if (window.__rotated){
-              // 旋转90度:宽高互换,让图片撑满屏幕宽度
-              var w = img.naturalWidth || img.offsetWidth;
-              var h = img.naturalHeight || img.offsetHeight;
-              var vw = document.documentElement.clientWidth;
-              var scale = vw / h; // 旋转后用原来的高度作为宽度来铺满
-              img.style.transform = 'rotate(90deg) scaleX(' + scale + ') scaleY(' + scale + ')';
-              img.style.transformOrigin = 'center center';
-              img.style.width = h + 'px';
-              img.style.height = w + 'px';
-              img.style.marginLeft = ((vw - h) / 2) + 'px';
-              img.style.marginBottom = ((w * scale - w) / 2 + 8) + 'px';
-              img.style.marginTop = ((w * scale - w) / 2) + 'px';
-            } else {
-              // 恢复竖版
-              img.style.transform = '';
-              img.style.transformOrigin = '';
-              img.style.width = '100%';
-              img.style.height = '';
-              img.style.marginLeft = '';
-              img.style.marginBottom = '';
-              img.style.marginTop = '';
-            }
-          });
           btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
           rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
+          applyRotation(window.__rotated);
         });
+
+        function applyRotation(rotated){
+          var imgs = document.querySelectorAll('img.content-img');
+          imgs.forEach(function(img){
+            if (rotated){
+              // 等图片真正加载完再旋转
+              function doRotate(){
+                if (!img.naturalWidth) return;
+                var w = img.naturalWidth, h = img.naturalHeight;
+                var canvas = document.createElement('canvas');
+                canvas.width = h; canvas.height = w;
+                var ctx = canvas.getContext('2d');
+                ctx.translate(h/2, w/2);
+                ctx.rotate(Math.PI/2);
+                ctx.drawImage(img, -w/2, -h/2, w, h);
+                img.src = canvas.toDataURL('image/webp');
+                img.style.width = '100%';
+                img.style.height = 'auto';
+                img.setAttribute('data-rotated','1');
+              }
+              if (img.complete && img.naturalWidth) doRotate();
+              else img.addEventListener('load', doRotate, {once:true});
+            } else {
+              // 还原:重新从data-r-src加载原图
+              var orig = img.getAttribute('data-r-src') || img.getAttribute('data-original');
+              if (orig && img.getAttribute('data-rotated')){
+                img.src = orig;
+                img.removeAttribute('data-rotated');
+                img.style.width = '100%';
+                img.style.height = 'auto';
+              }
+            }
+          });
+        }
 
         // 自动隐藏:3秒无操作后变透明,触摸/移动鼠标恢复显示
         panel.style.transition = 'opacity 0.4s';
