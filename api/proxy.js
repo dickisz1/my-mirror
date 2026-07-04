@@ -100,6 +100,10 @@ export default async function handler(req) {
             max-width: 100% !important;
           }
         }
+        /* 强制忽略图片EXIF旋转信息,防止横向漫画被自动旋转90度 */
+        #cp_img img, #cp_img img.auto-loaded-img {
+          image-orientation: none !important;
+        }
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
 
