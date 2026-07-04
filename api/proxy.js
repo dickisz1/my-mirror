@@ -290,6 +290,49 @@ export default async function handler(req) {
         panel.appendChild(btnSlower);
         panel.appendChild(speedLabel);
 
+        // 旋转切换按钮
+        var btnRotate = makeBtn('⟳');
+        btnRotate.title = '切换横/竖';
+        var rotateLabel = document.createElement('div');
+        rotateLabel.style.cssText = 'color:#fff;font-size:11px;text-align:center;';
+        rotateLabel.textContent = '旋转';
+        panel.appendChild(btnRotate);
+        panel.appendChild(rotateLabel);
+
+        window.__rotated = false;
+        btnRotate.addEventListener('click', function(e){
+          e.stopPropagation();
+          window.__rotated = !window.__rotated;
+          var imgs = document.querySelectorAll('img.content-img');
+          imgs.forEach(function(img){
+            if (window.__rotated){
+              // 旋转90度:宽高互换,让图片撑满屏幕宽度
+              var w = img.naturalWidth || img.offsetWidth;
+              var h = img.naturalHeight || img.offsetHeight;
+              var vw = document.documentElement.clientWidth;
+              var scale = vw / h; // 旋转后用原来的高度作为宽度来铺满
+              img.style.transform = 'rotate(90deg) scaleX(' + scale + ') scaleY(' + scale + ')';
+              img.style.transformOrigin = 'center center';
+              img.style.width = h + 'px';
+              img.style.height = w + 'px';
+              img.style.marginLeft = ((vw - h) / 2) + 'px';
+              img.style.marginBottom = ((w * scale - w) / 2 + 8) + 'px';
+              img.style.marginTop = ((w * scale - w) / 2) + 'px';
+            } else {
+              // 恢复竖版
+              img.style.transform = '';
+              img.style.transformOrigin = '';
+              img.style.width = '100%';
+              img.style.height = '';
+              img.style.marginLeft = '';
+              img.style.marginBottom = '';
+              img.style.marginTop = '';
+            }
+          });
+          btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
+          rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
+        });
+
         // 自动隐藏:3秒无操作后变透明,触摸/移动鼠标恢复显示
         panel.style.transition = 'opacity 0.4s';
         var hideTimer = null;
