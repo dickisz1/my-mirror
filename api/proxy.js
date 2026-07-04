@@ -88,6 +88,18 @@ export default async function handler(req) {
           position: absolute !important;
           top: -9999px !important;
         }
+        /* PC端宽屏适配:让漫画内容区突破520px手机宽度限制 */
+        @media (min-width: 600px) {
+          .main-content {
+            width: 100% !important;
+            max-width: 800px !important;
+            margin: 0 auto !important;
+          }
+          #cp_img.view-main-1 img {
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+        }
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
 
