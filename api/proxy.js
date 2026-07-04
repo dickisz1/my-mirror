@@ -188,6 +188,26 @@ export default async function handler(req) {
                     obs.unobserve(imgEl);
                     decryptImageToBlobUrl(url).then(function(blobUrl){
                       imgEl.src = blobUrl;
+                      // 解密完成后,如果当前处于旋转模式,自动旋转这张新图
+                      if (window.__rotated){
+                        imgEl.addEventListener('load', function(){
+                          var w = imgEl.naturalWidth, h = imgEl.naturalHeight;
+                          if (!w || !h) return;
+                          var ratio = h / w;
+                          if (ratio < 1.2 || ratio > 4) return;
+                          var canvas = document.createElement('canvas');
+                          canvas.width = h; canvas.height = w;
+                          var ctx = canvas.getContext('2d');
+                          ctx.translate(h/2, w/2);
+                          ctx.rotate(Math.PI/2);
+                          ctx.drawImage(imgEl, -w/2, -h/2, w, h);
+                          imgEl.setAttribute('data-orig-src', blobUrl);
+                          imgEl.src = canvas.toDataURL('image/jpeg', 0.92);
+                          imgEl.style.width = '100%';
+                          imgEl.style.height = 'auto';
+                          imgEl.setAttribute('data-rotated','1');
+                        }, { once: true });
+                      }
                     }).catch(function(err){
                       console.error('图片解密失败:', err);
                     });
