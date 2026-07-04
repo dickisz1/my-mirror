@@ -238,17 +238,21 @@ export default async function handler(req) {
         observer.observe(sentinel);
       });
 
-      // ===== PC端宽屏适配:强制让页面随屏幕宽度伸展 =====
+      // ===== PC端宽屏适配:等所有CSS加载完再强制覆盖body宽度 =====
       (function(){
-        if (window.innerWidth <= 600) return; // 手机端不处理
-        var style = document.createElement('style');
-        style.textContent = [
-          'body { max-width:100%!important; width:100%!important; }',
-          '.main-content { max-width:100%!important; width:100%!important; padding-left:0!important; padding-right:0!important; }',
-          '#cp_img.view-main-1 { max-width:100%!important; width:100%!important; }',
-          '#cp_img.view-main-1 img { width:100%!important; max-width:100%!important; image-orientation:none!important; }',
-        ].join('\n');
-        document.head.appendChild(style);
+        if (window.innerWidth <= 600) return;
+        function applyWide(){
+          document.body.style.setProperty('max-width','100%','important');
+          document.body.style.setProperty('width','100%','important');
+          var mc = document.querySelector('.main-content');
+          if (mc){
+            mc.style.setProperty('max-width','100%','important');
+            mc.style.setProperty('width','100%','important');
+          }
+        }
+        // 先跑一次,再在load后跑一次确保覆盖所有后加载的CSS
+        applyWide();
+        window.addEventListener('load', applyWide);
       })();
 
       // ===== 自动滚屏功能 =====
