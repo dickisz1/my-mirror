@@ -194,7 +194,10 @@ export default async function handler(req) {
                           var w = imgEl.naturalWidth, h = imgEl.naturalHeight;
                           if (!w || !h) return;
                           var ratio = h / w;
-                          if (ratio < 1.2 || ratio > 4) return;
+                          // ratio<1 说明图片已经是横版(宽>高),不需要再转
+                          // ratio>4 说明是极细长条装饰图,跳过
+                          // 只转 1~4 之间的正常竖版漫画页
+                          if (ratio < 1 || ratio > 4) return;
                           var canvas = document.createElement('canvas');
                           canvas.width = h; canvas.height = w;
                           var ctx = canvas.getContext('2d');
@@ -336,7 +339,10 @@ export default async function handler(req) {
                 // 只旋转"正常漫画页"比例的图片:
                 // 高宽比在 1.2~4 之间才是正常竖版漫画页,跳过极端细长条/正方形/横图
                 var ratio = h / w;
-                if (ratio < 1.2 || ratio > 4) return;
+                // ratio<1 说明图片已经是横版(宽>高),不需要再转
+                // ratio>4 说明是极细长条装饰图,跳过
+                // 只转 1~4 之间的正常竖版漫画页
+                if (ratio < 1 || ratio > 4) return;
                 var canvas = document.createElement('canvas');
                 canvas.width = h; canvas.height = w;
                 var ctx = canvas.getContext('2d');
@@ -401,12 +407,20 @@ export default async function handler(req) {
           window.__isScrolling = true;
           btnToggle.textContent = '⏸';
           window.__scrollTimer = requestAnimationFrame(doScroll);
+          // 申请屏幕常亮,防止息屏打断自动滑屏
+          if ('wakeLock' in navigator) {
+            navigator.wakeLock.request('screen').then(function(lock){
+              window.__wakeLock = lock;
+            }).catch(function(){});
+          }
         }
 
         function stopScroll(){
           window.__isScrolling = false;
           btnToggle.textContent = '▶';
           if (window.__scrollTimer){ cancelAnimationFrame(window.__scrollTimer); window.__scrollTimer = null; }
+          // 释放屏幕常亮
+          if (window.__wakeLock) { window.__wakeLock.release(); window.__wakeLock = null; }
         }
 
         btnToggle.addEventListener('click', function(e){
