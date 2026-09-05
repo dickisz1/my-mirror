@@ -7,7 +7,7 @@ const ASSET_HOST = "mwappimgs.cc";
 const ASSET_PREFIX = "/__assets__"; // 用一个特殊路径前缀来区分"这是要转发给图片域名的请求"
 
 export default async function handler(req) {
-  const targetHost = "manwa.me";
+  const targetHost = "manwari.cc";
   const url = new URL(req.url);
   const myHost = url.host;
 
