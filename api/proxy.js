@@ -82,7 +82,49 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
-      // 注入基础样式防护（去广告 + 宽屏适配 + SweetAlert2 弹窗强力压制 + 滚动解锁）
+      // 1. 优先注入 JS API 劫持防御脚本（在 head 顶部最快生效，彻底封锁移动端 window.open 弹窗与伪造点击）
+      const apiShieldScript = `
+      <script>
+        (function blockMobilePopups() {
+          const currentHost = window.location.host;
+
+          // 重写 window.open，强行过滤非本站域名的弹窗（拦截 bgi2282uht.vip:9527 等恶意地址）
+          const nativeOpen = window.open;
+          window.open = function(url, target, features) {
+            if (!url) return null;
+            try {
+              const targetUrl = new URL(url, window.location.href);
+              // 如果跳转的目标域名与当前代理域名不同，且包含非法端口或异域，直接拦截阻断
+              if (targetUrl.host !== currentHost) {
+                console.warn('[Edge 防护] 已成功拦截跨域移动端强弹外链:', url);
+                return null;
+              }
+            } catch (e) {
+              return null;
+            }
+            return nativeOpen.apply(this, arguments);
+          };
+
+          // 防御移动端全局 touchstart/click 事件劫持（拦截注入到 window.location 的强行重定向）
+          document.addEventListener('click', function(e) {
+            let target = e.target;
+            while (target && target !== document.body) {
+              if (target.tagName === 'A') {
+                const href = target.getAttribute('href');
+                if (href && (href.includes('9527') || href.includes('.vip') || href.startsWith('http') && !href.includes(currentHost))) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.warn('[Edge 防护] 已成功拦截移动端触屏点击劫持外链:', href);
+                  return false;
+                }
+              }
+              target = target.parentNode;
+            }
+          }, true);
+        })();
+      </script>`;
+
+      // 2. 注入 CSS 防护（去广告 + 宽屏适配 + SweetAlert2 全局压制 + 滚动锁死解除）
       const adShield = `
       <style>
         /* 1. 屏蔽指定广告块与悬浮元素 */
@@ -101,7 +143,7 @@ export default async function handler(req) {
           top: -9999px !important;
         }
 
-        /* 2. P0 级修补：强制压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
+        /* 2. P0 级修补：强力压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
         .swal2-container,
         .swal2-popup,
         .swal2-backdrop-show,
@@ -158,9 +200,11 @@ export default async function handler(req) {
           image-orientation: none !important;
         }
       </style>`;
+
+      text = text.replace('<head>', `<head>${apiShieldScript}`);
       text = text.replace('</head>', `${adShield}</head>`);
 
-      // 注入白名单 DOM 软掩蔽沙盒防护脚本（强化对异步 SweetAlert2 节点的动态屏蔽）
+      // 3. 注入白名单 DOM 软掩蔽沙盒脚本
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
@@ -236,13 +280,12 @@ export default async function handler(req) {
             performSoftPruning();
           }
 
-          // 挂载 MutationObserver，拦截 AJAX 或异步 JS 动态插入的 SweetAlert2 / 广告节点
+          // 挂载 MutationObserver，拦截 AJAX 或异步 JS 动态插入的弹窗 / 广告节点
           const observer = new MutationObserver(mutations => {
             const mescroll = document.querySelector('#mescroll');
             mutations.forEach(mutation => {
               mutation.addedNodes.forEach(node => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
-                  // 针对动态插入 body 的弹窗/广告节点实施即时掩蔽
                   if (node.parentNode === document.body && node !== mescroll && !isAllowedNode(node)) {
                     maskNode(node);
                     return;
