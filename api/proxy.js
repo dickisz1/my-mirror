@@ -54,7 +54,7 @@ export default async function handler(req) {
     const resHeaders = new Headers();
     response.headers.forEach((v, k) => resHeaders.set(k, v));
 
-    // 补充 P1 级 CORS 全局跨域许可，彻底消灭二阶图床加载失败
+    // 全局注入 CORS 支持，消灭二阶图床与资源跨域拦截
     resHeaders.set('Access-Control-Allow-Origin', '*');
     resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     resHeaders.set('Access-Control-Allow-Headers', '*');
@@ -82,10 +82,10 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
-      // 注入基础样式防护（去广告 + 宽屏适配 + 布局父容器事件透传）
+      // 注入基础样式防护（去广告 + 宽屏适配 + SweetAlert2 弹窗强力压制 + 滚动解锁）
       const adShield = `
       <style>
-        /* 屏蔽指定广告块与弹窗 */
+        /* 1. 屏蔽指定广告块与悬浮元素 */
         a[href][target][rel][style],
         div.footer-float-icon,
         i.fas.fa-times,
@@ -101,13 +101,32 @@ export default async function handler(req) {
           top: -9999px !important;
         }
 
-        /* 隐藏章内分页器（软隐藏，不物理删除） */
+        /* 2. P0 级修补：强制压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
+        .swal2-container,
+        .swal2-popup,
+        .swal2-backdrop-show,
+        div[class*="swal"],
+        div[id*="swal"] {
+          display: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+
+        /* 3. P0 级二阶问题防护：强行解除弹窗组件向 html/body 施加的滚动锁死 */
+        html, body {
+          overflow: auto !important;
+          position: static !important;
+          height: auto !important;
+        }
+
+        /* 4. 隐藏真实章内分页器（软隐藏，不物理 remove） */
         #pagination-container, .pagination-container {
           display: none !important;
           visibility: hidden !important;
         }
 
-        /* P2 级底部定位父容器：保持 fixed 悬浮上下文，透传点击事件 */
+        /* 5. P2 级底部定位父容器：保持 fixed 悬浮上下文，透传点击事件 */
         .tooltip-bar, .bottomMenu {
           background: transparent !important;
           border: none !important;
@@ -115,7 +134,7 @@ export default async function handler(req) {
           pointer-events: none !important;
         }
 
-        /* 恢复 P1 级与 P2 级内部真实交互按钮的点击响应 */
+        /* 6. 恢复 P1 级与 P2 级内部真实交互按钮的点击响应 */
         .tooltip-bar a, 
         .bottomMenu a, 
         #chapter-list-button-desktop,
@@ -141,7 +160,7 @@ export default async function handler(req) {
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
 
-      // 注入白名单 DOM 软掩蔽沙盒防护脚本（废弃物理 remove，改为 CSS 掩蔽）
+      // 注入白名单 DOM 软掩蔽沙盒防护脚本（强化对异步 SweetAlert2 节点的动态屏蔽）
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
@@ -164,6 +183,15 @@ export default async function handler(req) {
 
           function isAllowedNode(node) {
             if (node.nodeType !== Node.ELEMENT_NODE) return true;
+            
+            // 显式拦截 SweetAlert2 相关动态节点
+            if (node.className && typeof node.className === 'string' && node.className.includes('swal')) {
+              return false;
+            }
+            if (node.id && typeof node.id === 'string' && node.id.includes('swal')) {
+              return false;
+            }
+
             return ALLOWED_SELECTORS.some(sel => {
               try {
                 return node.matches(sel) || node.querySelector(sel) !== null || node.closest(sel) !== null;
@@ -173,7 +201,7 @@ export default async function handler(req) {
             });
           }
 
-          // 核心修正：使用软掩蔽 (display: none) 替代物理删除 (remove())，保护 DOM 父子定位树结构
+          // 核心修正：使用 CSS 软掩蔽 (display: none) 替代物理删除 (remove())，保护 DOM 父子结构
           function maskNode(node) {
             if (node.nodeType === Node.ELEMENT_NODE && !['SCRIPT', 'STYLE', 'LINK'].includes(node.tagName)) {
               node.style.setProperty('display', 'none', 'important');
@@ -208,12 +236,13 @@ export default async function handler(req) {
             performSoftPruning();
           }
 
-          // 挂载 MutationObserver，拦截 AJAX 动态加载的垃圾节点，统一施加软掩蔽
+          // 挂载 MutationObserver，拦截 AJAX 或异步 JS 动态插入的 SweetAlert2 / 广告节点
           const observer = new MutationObserver(mutations => {
             const mescroll = document.querySelector('#mescroll');
             mutations.forEach(mutation => {
               mutation.addedNodes.forEach(node => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
+                  // 针对动态插入 body 的弹窗/广告节点实施即时掩蔽
                   if (node.parentNode === document.body && node !== mescroll && !isAllowedNode(node)) {
                     maskNode(node);
                     return;
@@ -224,6 +253,14 @@ export default async function handler(req) {
                 }
               });
             });
+
+            // 持续兜底：防止第三方脚本向 html/body 强行注入 overflow: hidden 导致页面不可滑动
+            if (document.body.style.overflow === 'hidden') {
+              document.body.style.setProperty('overflow', 'auto', 'important');
+            }
+            if (document.documentElement.style.overflow === 'hidden') {
+              document.documentElement.style.setProperty('overflow', 'auto', 'important');
+            }
           });
 
           observer.observe(document.body, { childList: true, subtree: true });
