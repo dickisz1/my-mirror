@@ -82,19 +82,18 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
-      // 1. 优先注入 JS API 劫持防御脚本（在 head 顶部最快生效，彻底封锁移动端 window.open 弹窗与伪造点击）
-      const apiShieldScript = `
+      // 1. 优先注入 JS API 劫持防御与无缝自动阅读巡航引擎脚本
+      const apiAndAutoReadScript = `
       <script>
-        (function blockMobilePopups() {
+        (function blockMobilePopupsAndAutoRead() {
           const currentHost = window.location.host;
 
-          // 重写 window.open，强行过滤非本站域名的弹窗（拦截 bgi2282uht.vip:9527 等恶意地址）
+          // --- 第一部分：移动端弹窗与点击劫持防御 ---
           const nativeOpen = window.open;
           window.open = function(url, target, features) {
             if (!url) return null;
             try {
               const targetUrl = new URL(url, window.location.href);
-              // 如果跳转的目标域名与当前代理域名不同，且包含非法端口或异域，直接拦截阻断
               if (targetUrl.host !== currentHost) {
                 console.warn('[Edge 防护] 已成功拦截跨域移动端强弹外链:', url);
                 return null;
@@ -105,13 +104,12 @@ export default async function handler(req) {
             return nativeOpen.apply(this, arguments);
           };
 
-          // 防御移动端全局 touchstart/click 事件劫持（拦截注入到 window.location 的强行重定向）
           document.addEventListener('click', function(e) {
             let target = e.target;
             while (target && target !== document.body) {
               if (target.tagName === 'A') {
                 const href = target.getAttribute('href');
-                if (href && (href.includes('9527') || href.includes('.vip') || href.startsWith('http') && !href.includes(currentHost))) {
+                if (href && (href.includes('9527') || href.includes('.vip') || (href.startsWith('http') && !href.includes(currentHost)))) {
                   e.preventDefault();
                   e.stopPropagation();
                   console.warn('[Edge 防护] 已成功拦截移动端触屏点击劫持外链:', href);
@@ -121,6 +119,94 @@ export default async function handler(req) {
               target = target.parentNode;
             }
           }, true);
+
+          // --- 第二部分：无缝自动阅读与平滑倍速巡航引擎 ---
+          const CONFIG = {
+            speedMultiplier: 2.5, // 平滑滚动倍速
+            bottomThreshold: 80   // 距离底部像素阈值
+          };
+
+          let isRunning = false;
+          let animationFrameId = null;
+
+          function smoothScrollStep() {
+            if (!isRunning) return;
+
+            window.scrollBy(0, 1.5 * CONFIG.speedMultiplier);
+
+            const distanceToBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
+
+            if (distanceToBottom <= CONFIG.bottomThreshold) {
+              console.log('[无缝自动阅读] 检测到触底，执行精准跨章跳转...');
+              isRunning = false;
+              cancelAnimationFrame(animationFrameId);
+              triggerNextChapter();
+              return;
+            }
+
+            animationFrameId = requestAnimationFrame(smoothScrollStep);
+          }
+
+          function triggerNextChapter() {
+            sessionStorage.setItem('AUTO_READ_ENABLED', '1');
+
+            const pathParts = window.location.pathname.split('/').filter(Boolean);
+            let nextBtn = document.querySelector('#next_chapter, a.next-chapter, #next');
+
+            if (!nextBtn) {
+              const links = Array.from(document.querySelectorAll('.tooltip-bar a, .bottomMenu a, .cm-topbar a'));
+              nextBtn = links.find(a => {
+                const href = a.getAttribute('href') || '';
+                return href.includes('/comic/') && href !== `/comic/${pathParts[1]}` && !href.endsWith(`/comic/${pathParts[1]}/`);
+              });
+            }
+
+            if (nextBtn) {
+              console.log('[无缝自动阅读] 已精准锁定下一章跳转:', nextBtn.href);
+              nextBtn.click();
+            } else {
+              console.warn('[无缝自动阅读] 无法找到下一章链接（可能已是最后一章），已暂停。');
+              sessionStorage.removeItem('AUTO_READ_ENABLED');
+            }
+          }
+
+          function toggleAutoRead() {
+            const pathParts = window.location.pathname.split('/').filter(Boolean);
+            const isChapterPage = pathParts.length >= 3 && pathParts[0] === 'comic';
+
+            if (!isChapterPage) {
+              sessionStorage.removeItem('AUTO_READ_ENABLED');
+              return;
+            }
+
+            isRunning = !isRunning;
+            if (isRunning) {
+              console.log(`[无缝自动阅读] 已启动 | 倍速: ${CONFIG.speedMultiplier}x`);
+              sessionStorage.setItem('AUTO_READ_ENABLED', '1');
+              smoothScrollStep();
+            } else {
+              console.log('[无缝自动阅读] 已暂停');
+              sessionStorage.removeItem('AUTO_READ_ENABLED');
+              if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            }
+          }
+
+          // 接管原站 #autoscroll 悬浮图标并恢复跨章自动延续
+          document.addEventListener('DOMContentLoaded', function() {
+            const autoScrollBtn = document.querySelector('#autoscroll');
+            if (autoScrollBtn) {
+              autoScrollBtn.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleAutoRead();
+              };
+            }
+
+            if (sessionStorage.getItem('AUTO_READ_ENABLED') === '1') {
+              console.log('[无缝自动阅读] 识别到跨章接续标记，即将恢复平滑滚动...');
+              setTimeout(toggleAutoRead, 1200);
+            }
+          });
         })();
       </script>`;
 
@@ -143,7 +229,7 @@ export default async function handler(req) {
           top: -9999px !important;
         }
 
-        /* 2. P0 级修补：强力压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
+        /* 2. 强力压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
         .swal2-container,
         .swal2-popup,
         .swal2-backdrop-show,
@@ -155,7 +241,7 @@ export default async function handler(req) {
           pointer-events: none !important;
         }
 
-        /* 3. P0 级二阶问题防护：强行解除弹窗组件向 html/body 施加的滚动锁死 */
+        /* 3. 解除弹窗组件向 html/body 施加的滚动锁死 */
         html, body {
           overflow: auto !important;
           position: static !important;
@@ -180,7 +266,9 @@ export default async function handler(req) {
         .tooltip-bar a, 
         .bottomMenu a, 
         #chapter-list-button-desktop,
-        .cm-topbar a {
+        .cm-topbar a,
+        .circle-box a,
+        #autoscroll {
           pointer-events: auto !important;
           cursor: pointer !important;
         }
@@ -201,7 +289,7 @@ export default async function handler(req) {
         }
       </style>`;
 
-      text = text.replace('<head>', `<head>${apiShieldScript}`);
+      text = text.replace('<head>', `<head>${apiAndAutoReadScript}`);
       text = text.replace('</head>', `${adShield}</head>`);
 
       // 3. 注入白名单 DOM 软掩蔽沙盒脚本
@@ -219,6 +307,8 @@ export default async function handler(req) {
             '.clearfix',
             '.tooltip-bar',
             '.bottomMenu',
+            '.circle-box',
+            '#autoscroll',
             '#chapter-list-button-desktop',
             'script',
             'style',
@@ -227,8 +317,7 @@ export default async function handler(req) {
 
           function isAllowedNode(node) {
             if (node.nodeType !== Node.ELEMENT_NODE) return true;
-            
-            // 显式拦截 SweetAlert2 相关动态节点
+
             if (node.className && typeof node.className === 'string' && node.className.includes('swal')) {
               return false;
             }
@@ -245,7 +334,6 @@ export default async function handler(req) {
             });
           }
 
-          // 核心修正：使用 CSS 软掩蔽 (display: none) 替代物理删除 (remove())，保护 DOM 父子结构
           function maskNode(node) {
             if (node.nodeType === Node.ELEMENT_NODE && !['SCRIPT', 'STYLE', 'LINK'].includes(node.tagName)) {
               node.style.setProperty('display', 'none', 'important');
@@ -256,14 +344,12 @@ export default async function handler(req) {
           function performSoftPruning() {
             const mescroll = document.querySelector('#mescroll');
             if (mescroll) {
-              // 第一重：body 直属层级隔离，软隐藏非白名单节点
               Array.from(document.body.children).forEach(child => {
                 if (child !== mescroll && !isAllowedNode(child)) {
                   maskNode(child);
                 }
               });
 
-              // 第二重：#mescroll 内部非白名单节点软隐藏
               const internalNodes = mescroll.querySelectorAll('*');
               internalNodes.forEach(node => {
                 if (!isAllowedNode(node)) {
@@ -273,14 +359,12 @@ export default async function handler(req) {
             }
           }
 
-          // 页面加载完成后立即软剪枝
           if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', performSoftPruning);
           } else {
             performSoftPruning();
           }
 
-          // 挂载 MutationObserver，拦截 AJAX 或异步 JS 动态插入的弹窗 / 广告节点
           const observer = new MutationObserver(mutations => {
             const mescroll = document.querySelector('#mescroll');
             mutations.forEach(mutation => {
@@ -297,7 +381,6 @@ export default async function handler(req) {
               });
             });
 
-            // 持续兜底：防止第三方脚本向 html/body 强行注入 overflow: hidden 导致页面不可滑动
             if (document.body.style.overflow === 'hidden') {
               document.body.style.setProperty('overflow', 'auto', 'important');
             }
