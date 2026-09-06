@@ -2,16 +2,15 @@ export const config = {
   runtime: 'edge',
 };
 
-// 新增:定义需要一起代理的资源域名(图片/CSS 等)
+// 定义代理资源域名
 const ASSET_HOST = "mwappimgs.cc";
-const ASSET_PREFIX = "/__assets__"; // 用一个特殊路径前缀来区分"这是要转发给图片域名的请求"
+const ASSET_PREFIX = "/__assets__";
 
 export default async function handler(req) {
   const targetHost = "manwari.cc";
   const url = new URL(req.url);
   const myHost = url.host;
 
-  // === 新增逻辑:判断这次请求是不是冲着图片域名来的 ===
   let realTargetHost = targetHost;
   let realPath = url.pathname;
 
@@ -22,7 +21,7 @@ export default async function handler(req) {
 
   const targetUrl = `https://${realTargetHost}${realPath}${url.search}`;
 
-  // 1. 克隆并修正请求头（保持完整的 Content-Type 等 Header 透传，解决 API 500 报错）
+  // 1. 克隆并修正请求头（保持完整的 Content-Type 等 Header 透传，解决 500 报错）
   const newHeaders = new Headers();
   req.headers.forEach((value, key) => {
     if (key.toLowerCase() !== 'host') {
@@ -30,15 +29,13 @@ export default async function handler(req) {
     }
   });
 
-  // 必须正确重写 Host 和 Referer 伪装，防止目标站防盗链拒绝请求
   newHeaders.set('Host', realTargetHost);
   newHeaders.set('Referer', `https://${realTargetHost}/`);
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时,别让死链接卡住队列
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    // 构建发往目标站点的 fetch 配置项
     const fetchOptions = {
       method: req.method,
       headers: newHeaders,
@@ -46,7 +43,7 @@ export default async function handler(req) {
       signal: controller.signal
     };
 
-    // 【关键修复 500 报错】针对 POST/PUT 等带 Body 的 API 请求，必须完整读取并透传请求体 Buffer
+    // 针对带 Body 的 POST/PUT 等请求，透传 Body Buffer
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) {
       fetchOptions.body = await req.clone().arrayBuffer();
     }
@@ -61,11 +58,8 @@ export default async function handler(req) {
     const isStaticAsset = /image|font|javascript|css/.test(contentTypeForCache);
 
     if (isStaticAsset) {
-      // 静态资源:允许浏览器和 Vercel 边缘节点长期缓存,大幅提速
-      // 文件名带 ?v= 版本号的话,内容变了链接也会变,所以长缓存很安全
       resHeaders.set('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400');
     } else {
-      // 只有 HTML 主文档需要每次都拿最新内容(因为要动态注入去广告CSS)
       resHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0');
       resHeaders.set('Pragma', 'no-cache');
     }
@@ -84,6 +78,7 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
+      // 注入基础样式防护（去广告 + 宽屏适配）
       const adShield = `
       <style>
         a[href][target][rel][style],
@@ -100,7 +95,6 @@ export default async function handler(req) {
           position: absolute !important;
           top: -9999px !important;
         }
-        /* PC端宽屏适配:让漫画内容区突破520px手机宽度限制 */
         @media (min-width: 600px) {
           .main-content {
             width: 100% !important;
@@ -112,373 +106,97 @@ export default async function handler(req) {
             max-width: 100% !important;
           }
         }
-        /* 强制忽略图片EXIF旋转信息,防止横向漫画被自动旋转90度 */
         #cp_img img, #cp_img img.auto-loaded-img {
           image-orientation: none !important;
         }
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
-      // === 新增:自动加载下一章脚本,实现无缝阅读 ===
-      const autoLoadScript = `
+      // 注入白名单物理剪枝与 DOM 沙盒防护脚本
+      const domWhitelistSandbox = `
       <script>
-      document.addEventListener('DOMContentLoaded', function() {
-        var nextLink = document.querySelector('a.view-fix-bottom-bar-item-menu-next');
-        var container = document.querySelector('#cp_img.view-main-1');
-        if (!nextLink || !container) return;
+        (function applyDOMWhitelistSandbox() {
+          const ALLOWED_SELECTORS = [
+            '#mescroll',
+            '.cm-topbar',
+            '.cate-box',
+            '.cm-tabs',
+            '.bm-box',
+            '.center-tabs',
+            '.item',
+            '.clearfix',
+            'script',
+            'style',
+            'link'
+          ];
 
-        var loading = false;
-        var sentinel = document.createElement('div');
-        sentinel.id = '__auto_load_sentinel__';
-        sentinel.style.height = '1px';
-        container.parentNode.insertBefore(sentinel, container.nextSibling);
-
-        function loadNextChapter() {
-          if (loading) return;
-          var href = nextLink.getAttribute('href');
-          if (!href || href === 'javascript:;' || href === '#') return;
-          loading = true;
-
-          // 立刻插入"加载中"提示,给用户视觉反馈
-          var loadingTip = document.createElement('div');
-          loadingTip.id = '__loading_tip__';
-          loadingTip.style.textAlign = 'center';
-          loadingTip.style.padding = '24px 0';
-          loadingTip.style.color = '#999';
-          loadingTip.innerHTML = '<div style="display:inline-block;width:20px;height:20px;border:2px solid #ddd;border-top-color:#666;border-radius:50%;animation:__spin__ 0.8s linear infinite;"></div><div style="margin-top:8px;">正在加载下一章...</div><style>@keyframes __spin__{to{transform:rotate(360deg);}}</style>';
-          container.appendChild(loadingTip);
-
-          // data-r-src 属性在 HTML 一返回时就已经写好了真实地址,
-          // 不需要等待任何 JS 执行,直接 fetch 静态 HTML 解析即可,又快又稳
-          fetch(href, { credentials: 'same-origin' })
-            .then(function(res){ return res.text(); })
-            .then(function(html){
-              var parser = new DOMParser();
-              var doc = parser.parseFromString(html, 'text/html');
-              var nextContainer = doc.querySelector('#cp_img.view-main-1');
-              var nextNextLink = doc.querySelector('a.view-fix-bottom-bar-item-menu-next');
-
-              var tip = document.getElementById('__loading_tip__');
-              if (tip) tip.remove();
-
-              if (nextContainer) {
-                var divider = document.createElement('div');
-                divider.textContent = '— 已自动加载下一章 —';
-                divider.style.textAlign = 'center';
-                divider.style.color = '#999';
-                divider.style.padding = '16px 0';
-                container.appendChild(divider);
-
-                // 图片数据是 AES-CBC 加密过的,密钥和IV都是 "my2ecret782ecret"(16字节)
-                // 必须先解密成真实字节,才能当图片显示,不能直接拿地址当src用
-                var __aesKeyPromise = null;
-                function getAesKey() {
-                  if (!__aesKeyPromise) {
-                    var keyBytes = new TextEncoder().encode('my2ecret782ecret');
-                    __aesKeyPromise = crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
-                  }
-                  return __aesKeyPromise;
-                }
-                function decryptImageToBlobUrl(url) {
-                  var ivBytes = new TextEncoder().encode('my2ecret782ecret');
-                  return getAesKey()
-                    .then(function(key){ return fetch(url).then(function(res){ return res.arrayBuffer().then(function(buf){ return [key, buf]; }); }); })
-                    .then(function(pair){ return crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, pair[0], pair[1]); })
-                    .then(function(decryptedBuf){
-                      var blob = new Blob([decryptedBuf], { type: 'image/webp' });
-                      return URL.createObjectURL(blob);
-                    });
-                }
-
-                // 用 IntersectionObserver 实现"真正按需"懒加载:
-                // 图片标签先占位插入,只有滚动到附近才去发请求+解密,避免一次性大量请求
-                var __lazyDecryptObserver = new IntersectionObserver(function(entries, obs){
-                  entries.forEach(function(entry){
-                    if (!entry.isIntersecting) return;
-                    var imgEl = entry.target;
-                    var url = imgEl.getAttribute('data-real-url');
-                    obs.unobserve(imgEl);
-                    decryptImageToBlobUrl(url).then(function(blobUrl){
-                      imgEl.src = blobUrl;
-                      // 解密完成后,如果当前处于旋转模式,自动旋转这张新图
-                      if (window.__rotated){
-                        imgEl.addEventListener('load', function(){
-                          var w = imgEl.naturalWidth, h = imgEl.naturalHeight;
-                          if (!w || !h) return;
-                          var ratio = h / w;
-                          // ratio<1 说明图片已经是横版(宽>高),不需要再转
-                          // ratio>4 说明是极细长条装饰图,跳过
-                          // 只转 1~4 之间的正常竖版漫画页
-                          if (ratio < 1 || ratio > 4) return;
-                          var canvas = document.createElement('canvas');
-                          canvas.width = h; canvas.height = w;
-                          var ctx = canvas.getContext('2d');
-                          ctx.translate(h/2, w/2);
-                          ctx.rotate(Math.PI/2);
-                          ctx.drawImage(imgEl, -w/2, -h/2, w, h);
-                          imgEl.setAttribute('data-orig-src', blobUrl);
-                          imgEl.src = canvas.toDataURL('image/jpeg', 0.92);
-                          imgEl.style.width = '100%';
-                          imgEl.style.height = 'auto';
-                          imgEl.setAttribute('data-rotated','1');
-                        }, { once: true });
-                      }
-                    }).catch(function(err){
-                      console.error('图片解密失败:', err);
-                    });
-                  });
-                }, { rootMargin: '300px' });
-
-                var imgs = nextContainer.querySelectorAll('img.content-img');
-                imgs.forEach(function(img){
-                  // 真正的完整图片地址在 data-r-src 里,不是 data-original
-                  var real = img.getAttribute('data-r-src');
-                  if (!real || real.indexOf('blob:') === 0) return;
-                  var newImg = document.createElement('img');
-                  newImg.setAttribute('data-real-url', real);
-                  newImg.className = 'content-img auto-loaded-img';
-                  newImg.style.display = 'block';
-                  newImg.style.width = '100%';
-                  newImg.style.minHeight = '400px'; // 图片没下载完时先占住高度,避免被压成细线
-                  newImg.style.backgroundColor = '#f0f0f0'; // 占位时给个浅灰背景,过渡更自然
-                  container.appendChild(newImg);
-                  __lazyDecryptObserver.observe(newImg);
-                });
+          function isAllowedNode(node) {
+            if (node.nodeType !== Node.ELEMENT_NODE) return true;
+            return ALLOWED_SELECTORS.some(sel => {
+              try {
+                return node.matches(sel) || node.querySelector(sel) !== null || node.closest(sel) !== null;
+              } catch (e) {
+                return false;
               }
-
-              if (nextNextLink) {
-                nextLink.setAttribute('href', nextNextLink.getAttribute('href'));
-              } else {
-                nextLink.setAttribute('href', '');
-              }
-              history.pushState(null, '', href);
-
-              container.parentNode.insertBefore(sentinel, container.nextSibling);
-              loading = false;
-            })
-            .catch(function(err){
-              console.error('自动加载下一章失败:', err);
-              var tip2 = document.getElementById('__loading_tip__');
-              if (tip2) tip2.remove();
-              loading = false;
             });
-        }
-
-        var observer = new IntersectionObserver(function(entries){
-          entries.forEach(function(entry){
-            if (entry.isIntersecting) loadNextChapter();
-          });
-        }, { rootMargin: '1500px' });
-
-        observer.observe(sentinel);
-      });
-
-      // ===== PC端宽屏适配:等所有CSS加载完再强制覆盖body宽度 =====
-      (function(){
-        if (window.innerWidth <= 600) return;
-        function applyWide(){
-          document.body.style.setProperty('max-width','800px','important');
-          document.body.style.setProperty('width','100%','important');
-          document.body.style.setProperty('margin','0 auto','important');
-          var mc = document.querySelector('.main-content');
-          if (mc){
-            mc.style.setProperty('max-width','100%','important');
-            mc.style.setProperty('width','100%','important');
           }
-        }
-        // 先跑一次,再在load后跑一次确保覆盖所有后加载的CSS
-        applyWide();
-        window.addEventListener('load', applyWide);
-      })();
 
-      // ===== 自动滚屏功能 =====
-      (function(){
-        window.__scrollSpeed = 0.6;
-        window.__scrollIndex = 1;
-        window.__isScrolling = false;
-        window.__scrollTimer = null;
+          function performPhysicalPruning() {
+            const mescroll = document.querySelector('#mescroll');
+            if (mescroll) {
+              // 第一重：body 直属层级隔离，抹除非白名单节点
+              Array.from(document.body.children).forEach(child => {
+                if (child !== mescroll && !['SCRIPT', 'STYLE', 'LINK'].includes(child.tagName)) {
+                  child.remove();
+                }
+              });
 
-        var speedLevels = [0.3, 0.6, 1, 1.8, 3];
-        var speedNames  = ['极慢','慢速','中速','快速','极快'];
-
-        var panel = document.createElement('div');
-        panel.id = '__scroll_panel__';
-        panel.style.cssText = 'position:fixed;bottom:80px;right:12px;z-index:999998;display:flex;flex-direction:column;align-items:center;gap:6px;background:rgba(0,0,0,0.55);border-radius:20px;padding:10px 8px;';
-        document.body.appendChild(panel);
-
-        function makeBtn(label){
-          var b = document.createElement('button');
-          b.textContent = label;
-          b.style.cssText = 'width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.18);color:#fff;font-size:16px;cursor:pointer;';
-          return b;
-        }
-
-        var btnFaster = makeBtn('▲');
-        var btnToggle = makeBtn('▶');
-        var btnSlower = makeBtn('▼');
-        var speedLabel = document.createElement('div');
-        speedLabel.style.cssText = 'color:#fff;font-size:11px;text-align:center;';
-        speedLabel.textContent = '慢速';
-
-        panel.appendChild(btnFaster);
-        panel.appendChild(btnToggle);
-        panel.appendChild(btnSlower);
-        panel.appendChild(speedLabel);
-
-        // 旋转切换按钮
-        var btnRotate = makeBtn('⟳');
-        btnRotate.title = '切换横/竖';
-        var rotateLabel = document.createElement('div');
-        rotateLabel.style.cssText = 'color:#fff;font-size:11px;text-align:center;';
-        rotateLabel.textContent = '旋转';
-        panel.appendChild(btnRotate);
-        panel.appendChild(rotateLabel);
-
-        window.__rotated = false;
-        btnRotate.addEventListener('click', function(e){
-          e.stopPropagation();
-          window.__rotated = !window.__rotated;
-          btnRotate.textContent = window.__rotated ? '⟲' : '⟳';
-          rotateLabel.textContent = window.__rotated ? '还原' : '旋转';
-
-          var imgs = Array.from(document.querySelectorAll('img.content-img'));
-          imgs.forEach(function(img){
-            if (window.__rotated){
-              if (img.getAttribute('data-rotated')) return; // 已旋转过跳过
-              function doRotate(){
-                if (!img.naturalWidth || !img.naturalHeight) return;
-                var w = img.naturalWidth, h = img.naturalHeight;
-                // 只旋转"正常漫画页"比例的图片:
-                // 高宽比在 1.2~4 之间才是正常竖版漫画页,跳过极端细长条/正方形/横图
-                var ratio = h / w;
-                // ratio<1 说明图片已经是横版(宽>高),不需要再转
-                // ratio>4 说明是极细长条装饰图,跳过
-                // 只转 1~4 之间的正常竖版漫画页
-                if (ratio < 1 || ratio > 4) return;
-                var canvas = document.createElement('canvas');
-                canvas.width = h; canvas.height = w;
-                var ctx = canvas.getContext('2d');
-                ctx.translate(h/2, w/2);
-                ctx.rotate(Math.PI/2);
-                ctx.drawImage(img, -w/2, -h/2, w, h);
-                img.setAttribute('data-orig-src', img.src);
-                img.src = canvas.toDataURL('image/jpeg', 0.92);
-                img.style.width = '100%';
-                img.style.height = 'auto';
-                img.setAttribute('data-rotated', '1');
-              }
-              // 已加载完:直接转
-              if (img.complete && img.naturalWidth > 0){
-                doRotate();
-              } else {
-                // 未加载完:监听load事件,加载完自动转
-                img.addEventListener('load', doRotate, { once: true });
-              }
-            } else {
-              // 还原
-              var orig = img.getAttribute('data-orig-src');
-              if (orig){
-                img.src = orig;
-                img.removeAttribute('data-rotated');
-                img.removeAttribute('data-orig-src');
-                img.style.width = '100%';
-                img.style.height = 'auto';
-              }
+              // 第二重：#mescroll 内部非白名单垃圾节点清理
+              const internalNodes = mescroll.querySelectorAll('*');
+              internalNodes.forEach(node => {
+                if (!isAllowedNode(node)) {
+                  node.remove();
+                }
+              });
             }
+          }
+
+          // 页面加载完成后立即物理剪枝
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', performPhysicalPruning);
+          } else {
+            performPhysicalPruning();
+          }
+
+          // 挂载 MutationObserver，拦截 AJAX 翻页或异步脚本动态复活的广告
+          const observer = new MutationObserver(mutations => {
+            const mescroll = document.querySelector('#mescroll');
+            mutations.forEach(mutation => {
+              mutation.addedNodes.forEach(node => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                  if (node.parentNode === document.body && node !== mescroll && !['SCRIPT', 'STYLE'].includes(node.tagName)) {
+                    node.remove();
+                    return;
+                  }
+                  if (mescroll && mescroll.contains(node) && !isAllowedNode(node)) {
+                    node.remove();
+                  }
+                }
+              });
+            });
           });
-        });
 
-        // 自动隐藏:3秒无操作后变透明,触摸/移动鼠标恢复显示
-        panel.style.transition = 'opacity 0.4s';
-        var hideTimer = null;
-        function showPanel(){
-          panel.style.opacity = '1';
-          panel.style.pointerEvents = 'auto';
-          clearTimeout(hideTimer);
-          hideTimer = setTimeout(function(){
-            panel.style.opacity = '0.08';
-            panel.style.pointerEvents = 'none'; // 透明时不拦截点击穿透
-          }, 3000);
-        }
-        // 触摸、鼠标移动、点击都会唤醒
-        ['touchstart','touchmove','mousemove','click'].forEach(function(evt){
-          document.addEventListener(evt, showPanel, { passive: true });
-        });
-        // 悬停在面板上时保持显示
-        panel.addEventListener('mouseenter', function(){ clearTimeout(hideTimer); panel.style.opacity='1'; });
-        panel.addEventListener('mouseleave', showPanel);
-        showPanel(); // 初始化:先显示一次,3秒后自动隐藏
-
-        function doScroll(){
-          if (!window.__isScrolling) return;
-          window.scrollBy(0, window.__scrollSpeed);
-          window.__scrollTimer = requestAnimationFrame(doScroll);
-        }
-
-        function startScroll(){
-          window.__isScrolling = true;
-          btnToggle.textContent = '⏸';
-          window.__scrollTimer = requestAnimationFrame(doScroll);
-          // 申请屏幕常亮,防止息屏打断自动滑屏
-          if ('wakeLock' in navigator) {
-            navigator.wakeLock.request('screen').then(function(lock){
-              window.__wakeLock = lock;
-            }).catch(function(){});
-          }
-        }
-
-        function stopScroll(){
-          window.__isScrolling = false;
-          btnToggle.textContent = '▶';
-          if (window.__scrollTimer){ cancelAnimationFrame(window.__scrollTimer); window.__scrollTimer = null; }
-          // 释放屏幕常亮
-          if (window.__wakeLock) { window.__wakeLock.release(); window.__wakeLock = null; }
-        }
-
-        btnToggle.addEventListener('click', function(e){
-          e.stopPropagation();
-          if (window.__isScrolling) stopScroll(); else startScroll();
-        });
-
-        btnFaster.addEventListener('click', function(e){
-          e.stopPropagation();
-          if (window.__scrollIndex < speedLevels.length - 1){
-            window.__scrollIndex++;
-            window.__scrollSpeed = speedLevels[window.__scrollIndex];
-            speedLabel.textContent = speedNames[window.__scrollIndex];
-          }
-        });
-
-        btnSlower.addEventListener('click', function(e){
-          e.stopPropagation();
-          if (window.__scrollIndex > 0){
-            window.__scrollIndex--;
-            window.__scrollSpeed = speedLevels[window.__scrollIndex];
-            speedLabel.textContent = speedNames[window.__scrollIndex];
-          }
-        });
-
-        // 点击漫画区域切换暂停/继续
-        var comicArea = document.querySelector('#cp_img');
-        if (comicArea){
-          comicArea.addEventListener('click', function(){
-            if (window.__isScrolling) stopScroll(); else startScroll();
-          });
-        }
-
-        // 到底自动停
-        window.addEventListener('scroll', function(){
-          if (!window.__isScrolling) return;
-          if ((window.innerHeight + window.scrollY) >= document.body.scrollHeight - 10) stopScroll();
-        }, { passive: true });
-      })();
+          observer.observe(document.body, { childList: true, subtree: true });
+        })();
       </script>`;
-      text = text.replace('</body>', `${autoLoadScript}</body>`);
 
-      // === 新增:把 HTML 里所有指向图片域名的链接,改写成走我们自己的 /__assets__ 前缀 ===
-      text = text
-        .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
-        .split(`//${ASSET_HOST}`).join(`//${myHost}${ASSET_PREFIX}`)
-        .split(targetHost).join(myHost);
+      text = text.replace('</body>', `${domWhitelistSandbox}</body>`);
+
+      // 域名重写与资源路径映射
+      text = text.replace(new RegExp(`https://${ASSET_HOST}`, 'g'), ASSET_PREFIX);
+      text = text.replace(new RegExp(`https://${targetHost}`, 'g'), `https://${myHost}`);
+
+      resHeaders.delete('content-length');
+      resHeaders.set('content-type', 'text/html; charset=utf-8');
 
       return new Response(text, {
         status: response.status,
@@ -486,38 +204,23 @@ export default async function handler(req) {
       });
     }
 
-    // 如果是 CSS,里面可能也有 url(https://mwappimgs.cc/xxx.png) 这种引用,同样要替换
-    if (contentType.includes('text/css')) {
-      let css = await response.text();
-      css = css
-        .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
-        .split(`//${ASSET_HOST}`).join(`//${myHost}${ASSET_PREFIX}`);
-      return new Response(css, {
+    // 针对 JSON 或其他文本接口，补充域名重写
+    if (contentType.includes('application/json') || contentType.includes('text/plain')) {
+      let jsonText = await response.text();
+      jsonText = jsonText.replace(new RegExp(`https://${targetHost}`, 'g'), `https://${myHost}`);
+      resHeaders.delete('content-length');
+      return new Response(jsonText, {
         status: response.status,
         headers: resHeaders
       });
     }
 
-    // JS 文件里有时会硬编码图片真实域名(比如章节数据脚本),同样需要替换
-    if (contentTypeForCache.includes('javascript')) {
-      let js = await response.text();
-      js = js
-        .split(`https://${ASSET_HOST}`).join(`https://${myHost}${ASSET_PREFIX}`)
-        .split(`//${ASSET_HOST}`).join(`//${myHost}${ASSET_PREFIX}`)
-        .split(targetHost).join(myHost);
-      return new Response(js, {
-        status: response.status,
-        headers: resHeaders
-      });
-    }
-
-    // 图片等二进制内容,直接转发,不需要文本替换
     return new Response(response.body, {
       status: response.status,
       headers: resHeaders
     });
 
   } catch (err) {
-    return new Response("Edge Proxy Error: " + err.message, { status: 502 });
+    return new Response(`Edge Proxy Error: ${err.message}`, { status: 502 });
   }
 }
