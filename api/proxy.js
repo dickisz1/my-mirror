@@ -54,6 +54,11 @@ export default async function handler(req) {
     const resHeaders = new Headers();
     response.headers.forEach((v, k) => resHeaders.set(k, v));
 
+    // 补充 P1 级 CORS 全局跨域许可，彻底消灭二阶图床加载失败
+    resHeaders.set('Access-Control-Allow-Origin', '*');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    resHeaders.set('Access-Control-Allow-Headers', '*');
+
     const contentTypeForCache = resHeaders.get('content-type') || '';
     const isStaticAsset = /image|font|javascript|css/.test(contentTypeForCache);
 
@@ -74,13 +79,13 @@ export default async function handler(req) {
     });
 
     const contentType = resHeaders.get('content-type') || '';
-
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
-      // 注入基础样式防护（去广告 + 宽屏适配）
+      // 注入基础样式防护（去广告 + 宽屏适配 + 布局父容器事件透传）
       const adShield = `
       <style>
+        /* 屏蔽指定广告块与弹窗 */
         a[href][target][rel][style],
         div.footer-float-icon,
         i.fas.fa-times,
@@ -95,6 +100,30 @@ export default async function handler(req) {
           position: absolute !important;
           top: -9999px !important;
         }
+
+        /* 隐藏章内分页器（软隐藏，不物理删除） */
+        #pagination-container, .pagination-container {
+          display: none !important;
+          visibility: hidden !important;
+        }
+
+        /* P2 级底部定位父容器：保持 fixed 悬浮上下文，透传点击事件 */
+        .tooltip-bar, .bottomMenu {
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
+          pointer-events: none !important;
+        }
+
+        /* 恢复 P1 级与 P2 级内部真实交互按钮的点击响应 */
+        .tooltip-bar a, 
+        .bottomMenu a, 
+        #chapter-list-button-desktop,
+        .cm-topbar a {
+          pointer-events: auto !important;
+          cursor: pointer !important;
+        }
+
         @media (min-width: 600px) {
           .main-content {
             width: 100% !important;
@@ -111,7 +140,8 @@ export default async function handler(req) {
         }
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
-      // 注入白名单物理剪枝与 DOM 沙盒防护脚本
+
+      // 注入白名单 DOM 软掩蔽沙盒防护脚本（废弃物理 remove，改为 CSS 掩蔽）
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
@@ -124,6 +154,9 @@ export default async function handler(req) {
             '.center-tabs',
             '.item',
             '.clearfix',
+            '.tooltip-bar',
+            '.bottomMenu',
+            '#chapter-list-button-desktop',
             'script',
             'style',
             'link'
@@ -140,45 +173,53 @@ export default async function handler(req) {
             });
           }
 
-          function performPhysicalPruning() {
+          // 核心修正：使用软掩蔽 (display: none) 替代物理删除 (remove())，保护 DOM 父子定位树结构
+          function maskNode(node) {
+            if (node.nodeType === Node.ELEMENT_NODE && !['SCRIPT', 'STYLE', 'LINK'].includes(node.tagName)) {
+              node.style.setProperty('display', 'none', 'important');
+              node.setAttribute('data-sandboxed-hidden', 'true');
+            }
+          }
+
+          function performSoftPruning() {
             const mescroll = document.querySelector('#mescroll');
             if (mescroll) {
-              // 第一重：body 直属层级隔离，抹除非白名单节点
+              // 第一重：body 直属层级隔离，软隐藏非白名单节点
               Array.from(document.body.children).forEach(child => {
-                if (child !== mescroll && !['SCRIPT', 'STYLE', 'LINK'].includes(child.tagName)) {
-                  child.remove();
+                if (child !== mescroll && !isAllowedNode(child)) {
+                  maskNode(child);
                 }
               });
 
-              // 第二重：#mescroll 内部非白名单垃圾节点清理
+              // 第二重：#mescroll 内部非白名单节点软隐藏
               const internalNodes = mescroll.querySelectorAll('*');
               internalNodes.forEach(node => {
                 if (!isAllowedNode(node)) {
-                  node.remove();
+                  maskNode(node);
                 }
               });
             }
           }
 
-          // 页面加载完成后立即物理剪枝
+          // 页面加载完成后立即软剪枝
           if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', performPhysicalPruning);
+            document.addEventListener('DOMContentLoaded', performSoftPruning);
           } else {
-            performPhysicalPruning();
+            performSoftPruning();
           }
 
-          // 挂载 MutationObserver，拦截 AJAX 翻页或异步脚本动态复活的广告
+          // 挂载 MutationObserver，拦截 AJAX 动态加载的垃圾节点，统一施加软掩蔽
           const observer = new MutationObserver(mutations => {
             const mescroll = document.querySelector('#mescroll');
             mutations.forEach(mutation => {
               mutation.addedNodes.forEach(node => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
-                  if (node.parentNode === document.body && node !== mescroll && !['SCRIPT', 'STYLE'].includes(node.tagName)) {
-                    node.remove();
+                  if (node.parentNode === document.body && node !== mescroll && !isAllowedNode(node)) {
+                    maskNode(node);
                     return;
                   }
                   if (mescroll && mescroll.contains(node) && !isAllowedNode(node)) {
-                    node.remove();
+                    maskNode(node);
                   }
                 }
               });
@@ -204,7 +245,7 @@ export default async function handler(req) {
       });
     }
 
-    // 针对 JSON 或其他文本接口，补充域名重写
+    // 针对 JSON 或其他文本接口，补充域名重写与 CORS 响应
     if (contentType.includes('application/json') || contentType.includes('text/plain')) {
       let jsonText = await response.text();
       jsonText = jsonText.replace(new RegExp(`https://${targetHost}`, 'g'), `https://${myHost}`);
