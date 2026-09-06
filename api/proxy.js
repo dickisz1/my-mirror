@@ -19,9 +19,9 @@ export default async function handler(req) {
     realPath = url.pathname.slice(ASSET_PREFIX.length) || "/";
   }
 
-  const targetUrl = `https://${realTargetHost}${realPath}${url.search}`;
+  const targetUrl = "https://" + realTargetHost + realPath + url.search;
 
-  // 1. 克隆并修正请求头（保持完整的 Content-Type 等 Header 透传，解决 500 报错）
+  // 1. 克隆并修正请求头
   const newHeaders = new Headers();
   req.headers.forEach((value, key) => {
     if (key.toLowerCase() !== 'host') {
@@ -30,7 +30,7 @@ export default async function handler(req) {
   });
 
   newHeaders.set('Host', realTargetHost);
-  newHeaders.set('Referer', `https://${realTargetHost}/`);
+  newHeaders.set('Referer', "https://" + realTargetHost + "/");
 
   try {
     const controller = new AbortController();
@@ -43,7 +43,6 @@ export default async function handler(req) {
       signal: controller.signal
     };
 
-    // 针对带 Body 的 POST/PUT 等请求，透传 Body Buffer
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) {
       fetchOptions.body = await req.clone().arrayBuffer();
     }
@@ -54,7 +53,7 @@ export default async function handler(req) {
     const resHeaders = new Headers();
     response.headers.forEach((v, k) => resHeaders.set(k, v));
 
-    // 全局注入 CORS 支持，消灭二阶图床与资源跨域拦截
+    // 全局注入 CORS 支持
     resHeaders.set('Access-Control-Allow-Origin', '*');
     resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     resHeaders.set('Access-Control-Allow-Headers', '*');
@@ -86,14 +85,14 @@ export default async function handler(req) {
       const apiAndAutoReadScript = `
       <script>
         (function blockMobilePopupsAndAutoRead() {
-          const currentHost = window.location.host;
+          var currentHost = window.location.host;
 
           // --- 第一部分：移动端弹窗与点击劫持防御 ---
-          const nativeOpen = window.open;
+          var nativeOpen = window.open;
           window.open = function(url, target, features) {
             if (!url) return null;
             try {
-              const targetUrl = new URL(url, window.location.href);
+              var targetUrl = new URL(url, window.location.href);
               if (targetUrl.host !== currentHost) {
                 console.warn('[Edge 防护] 已成功拦截跨域移动端强弹外链:', url);
                 return null;
@@ -105,10 +104,10 @@ export default async function handler(req) {
           };
 
           document.addEventListener('click', function(e) {
-            let target = e.target;
+            var target = e.target;
             while (target && target !== document.body) {
               if (target.tagName === 'A') {
-                const href = target.getAttribute('href');
+                var href = target.getAttribute('href');
                 if (href && (href.includes('9527') || href.includes('.vip') || (href.startsWith('http') && !href.includes(currentHost)))) {
                   e.preventDefault();
                   e.stopPropagation();
@@ -121,20 +120,20 @@ export default async function handler(req) {
           }, true);
 
           // --- 第二部分：无缝自动阅读与平滑倍速巡航引擎 ---
-          const CONFIG = {
-            speedMultiplier: 2.5, // 平滑滚动倍速
-            bottomThreshold: 80   // 距离底部像素阈值
+          var CONFIG = {
+            speedMultiplier: 2.5,
+            bottomThreshold: 80
           };
 
-          let isRunning = false;
-          let animationFrameId = null;
+          var isRunning = false;
+          var animationFrameId = null;
 
           function smoothScrollStep() {
             if (!isRunning) return;
 
             window.scrollBy(0, 1.5 * CONFIG.speedMultiplier);
 
-            const distanceToBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
+            var distanceToBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
 
             if (distanceToBottom <= CONFIG.bottomThreshold) {
               console.log('[无缝自动阅读] 检测到触底，执行精准跨章跳转...');
@@ -150,14 +149,15 @@ export default async function handler(req) {
           function triggerNextChapter() {
             sessionStorage.setItem('AUTO_READ_ENABLED', '1');
 
-            const pathParts = window.location.pathname.split('/').filter(Boolean);
-            let nextBtn = document.querySelector('#next_chapter, a.next-chapter, #next');
+            var pathParts = window.location.pathname.split('/').filter(Boolean);
+            var nextBtn = document.querySelector('#next_chapter, a.next-chapter, #next');
 
             if (!nextBtn) {
-              const links = Array.from(document.querySelectorAll('.tooltip-bar a, .bottomMenu a, .cm-topbar a'));
-              nextBtn = links.find(a => {
-                const href = a.getAttribute('href') || '';
-                return href.includes('/comic/') && href !== `/comic/${pathParts[1]}` && !href.endsWith(`/comic/${pathParts[1]}/`);
+              var links = Array.from(document.querySelectorAll('.tooltip-bar a, .bottomMenu a, .cm-topbar a'));
+              nextBtn = links.find(function(a) {
+                var href = a.getAttribute('href') || '';
+                var currentComicPath = '/comic/' + (pathParts[1] || '');
+                return href.includes('/comic/') && href !== currentComicPath && !href.endsWith(currentComicPath + '/');
               });
             }
 
@@ -171,8 +171,8 @@ export default async function handler(req) {
           }
 
           function toggleAutoRead() {
-            const pathParts = window.location.pathname.split('/').filter(Boolean);
-            const isChapterPage = pathParts.length >= 3 && pathParts[0] === 'comic';
+            var pathParts = window.location.pathname.split('/').filter(Boolean);
+            var isChapterPage = pathParts.length >= 3 && pathParts[0] === 'comic';
 
             if (!isChapterPage) {
               sessionStorage.removeItem('AUTO_READ_ENABLED');
@@ -181,7 +181,7 @@ export default async function handler(req) {
 
             isRunning = !isRunning;
             if (isRunning) {
-              console.log(`[无缝自动阅读] 已启动 | 倍速: ${CONFIG.speedMultiplier}x`);
+              console.log('[无缝自动阅读] 已启动 | 倍速: ' + CONFIG.speedMultiplier + 'x');
               sessionStorage.setItem('AUTO_READ_ENABLED', '1');
               smoothScrollStep();
             } else {
@@ -191,9 +191,8 @@ export default async function handler(req) {
             }
           }
 
-          // 接管原站 #autoscroll 悬浮图标并恢复跨章自动延续
           document.addEventListener('DOMContentLoaded', function() {
-            const autoScrollBtn = document.querySelector('#autoscroll');
+            var autoScrollBtn = document.querySelector('#autoscroll');
             if (autoScrollBtn) {
               autoScrollBtn.onclick = function(e) {
                 e.preventDefault();
@@ -210,10 +209,9 @@ export default async function handler(req) {
         })();
       </script>`;
 
-      // 2. 注入 CSS 防护（去广告 + 宽屏适配 + SweetAlert2 全局压制 + 滚动锁死解除）
+      // 2. 注入 CSS 防护
       const adShield = `
       <style>
-        /* 1. 屏蔽指定广告块与悬浮元素 */
         a[href][target][rel][style],
         div.footer-float-icon,
         i.fas.fa-times,
@@ -229,7 +227,6 @@ export default async function handler(req) {
           top: -9999px !important;
         }
 
-        /* 2. 强力压制 SweetAlert2 及所有第三方弹窗组件与遮罩层 */
         .swal2-container,
         .swal2-popup,
         .swal2-backdrop-show,
@@ -241,20 +238,17 @@ export default async function handler(req) {
           pointer-events: none !important;
         }
 
-        /* 3. 解除弹窗组件向 html/body 施加的滚动锁死 */
         html, body {
           overflow: auto !important;
           position: static !important;
           height: auto !important;
         }
 
-        /* 4. 隐藏真实章内分页器（软隐藏，不物理 remove） */
         #pagination-container, .pagination-container {
           display: none !important;
           visibility: hidden !important;
         }
 
-        /* 5. P2 级底部定位父容器：保持 fixed 悬浮上下文，透传点击事件 */
         .tooltip-bar, .bottomMenu {
           background: transparent !important;
           border: none !important;
@@ -262,7 +256,6 @@ export default async function handler(req) {
           pointer-events: none !important;
         }
 
-        /* 6. 恢复 P1 级与 P2 级内部真实交互按钮的点击响应 */
         .tooltip-bar a, 
         .bottomMenu a, 
         #chapter-list-button-desktop,
@@ -289,14 +282,14 @@ export default async function handler(req) {
         }
       </style>`;
 
-      text = text.replace('<head>', `<head>${apiAndAutoReadScript}`);
-      text = text.replace('</head>', `${adShield}</head>`);
+      text = text.replace('<head>', '<head>' + apiAndAutoReadScript);
+      text = text.replace('</head>', adShield + '</head>');
 
       // 3. 注入白名单 DOM 软掩蔽沙盒脚本
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
-          const ALLOWED_SELECTORS = [
+          var ALLOWED_SELECTORS = [
             '#mescroll',
             '.cm-topbar',
             '.cate-box',
@@ -325,7 +318,7 @@ export default async function handler(req) {
               return false;
             }
 
-            return ALLOWED_SELECTORS.some(sel => {
+            return ALLOWED_SELECTORS.some(function(sel) {
               try {
                 return node.matches(sel) || node.querySelector(sel) !== null || node.closest(sel) !== null;
               } catch (e) {
@@ -342,16 +335,16 @@ export default async function handler(req) {
           }
 
           function performSoftPruning() {
-            const mescroll = document.querySelector('#mescroll');
+            var mescroll = document.querySelector('#mescroll');
             if (mescroll) {
-              Array.from(document.body.children).forEach(child => {
+              Array.from(document.body.children).forEach(function(child) {
                 if (child !== mescroll && !isAllowedNode(child)) {
                   maskNode(child);
                 }
               });
 
-              const internalNodes = mescroll.querySelectorAll('*');
-              internalNodes.forEach(node => {
+              var internalNodes = mescroll.querySelectorAll('*');
+              internalNodes.forEach(function(node) {
                 if (!isAllowedNode(node)) {
                   maskNode(node);
                 }
@@ -365,10 +358,10 @@ export default async function handler(req) {
             performSoftPruning();
           }
 
-          const observer = new MutationObserver(mutations => {
-            const mescroll = document.querySelector('#mescroll');
-            mutations.forEach(mutation => {
-              mutation.addedNodes.forEach(node => {
+          var observer = new MutationObserver(function(mutations) {
+            var mescroll = document.querySelector('#mescroll');
+            mutations.forEach(function(mutation) {
+              mutation.addedNodes.forEach(function(node) {
                 if (node.nodeType === Node.ELEMENT_NODE) {
                   if (node.parentNode === document.body && node !== mescroll && !isAllowedNode(node)) {
                     maskNode(node);
@@ -393,11 +386,11 @@ export default async function handler(req) {
         })();
       </script>`;
 
-      text = text.replace('</body>', `${domWhitelistSandbox}</body>`);
+      text = text.replace('</body>', domWhitelistSandbox + '</body>');
 
       // 域名重写与资源路径映射
-      text = text.replace(new RegExp(`https://${ASSET_HOST}`, 'g'), ASSET_PREFIX);
-      text = text.replace(new RegExp(`https://${targetHost}`, 'g'), `https://${myHost}`);
+      text = text.replace(new RegExp("https://" + ASSET_HOST, 'g'), ASSET_PREFIX);
+      text = text.replace(new RegExp("https://" + targetHost, 'g'), "https://" + myHost);
 
       resHeaders.delete('content-length');
       resHeaders.set('content-type', 'text/html; charset=utf-8');
@@ -408,10 +401,9 @@ export default async function handler(req) {
       });
     }
 
-    // 针对 JSON 或其他文本接口，补充域名重写与 CORS 响应
     if (contentType.includes('application/json') || contentType.includes('text/plain')) {
       let jsonText = await response.text();
-      jsonText = jsonText.replace(new RegExp(`https://${targetHost}`, 'g'), `https://${myHost}`);
+      jsonText = jsonText.replace(new RegExp("https://" + targetHost, 'g'), "https://" + myHost);
       resHeaders.delete('content-length');
       return new Response(jsonText, {
         status: response.status,
@@ -425,6 +417,6 @@ export default async function handler(req) {
     });
 
   } catch (err) {
-    return new Response(`Edge Proxy Error: ${err.message}`, { status: 502 });
+    return new Response("Edge Proxy Error: " + err.message, { status: 502 });
   }
 }
