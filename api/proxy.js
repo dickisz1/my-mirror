@@ -22,7 +22,7 @@ export default async function handler(req) {
 
   const targetUrl = `https://${realTargetHost}${realPath}${url.search}`;
 
-  // 1. 克隆并修正请求头
+  // 1. 克隆并修正请求头（保持完整的 Content-Type 等 Header 透传，解决 API 500 报错）
   const newHeaders = new Headers();
   req.headers.forEach((value, key) => {
     if (key.toLowerCase() !== 'host') {
@@ -30,16 +30,28 @@ export default async function handler(req) {
     }
   });
 
+  // 必须正确重写 Host 和 Referer 伪装，防止目标站防盗链拒绝请求
+  newHeaders.set('Host', realTargetHost);
+  newHeaders.set('Referer', `https://${realTargetHost}/`);
+
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时,别让死链接卡住队列
 
-    const response = await fetch(targetUrl, {
+    // 构建发往目标站点的 fetch 配置项
+    const fetchOptions = {
       method: req.method,
       headers: newHeaders,
       redirect: 'manual',
       signal: controller.signal
-    });
+    };
+
+    // 【关键修复 500 报错】针对 POST/PUT 等带 Body 的 API 请求，必须完整读取并透传请求体 Buffer
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) {
+      fetchOptions.body = await req.clone().arrayBuffer();
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
     clearTimeout(timeoutId);
 
     const resHeaders = new Headers();
@@ -106,7 +118,6 @@ export default async function handler(req) {
         }
       </style>`;
       text = text.replace('</head>', `${adShield}</head>`);
-
       // === 新增:自动加载下一章脚本,实现无缝阅读 ===
       const autoLoadScript = `
       <script>
