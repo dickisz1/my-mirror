@@ -2,7 +2,6 @@ export const config = {
   runtime: 'edge',
 };
 
-// 定义代理资源域名
 const ASSET_HOST = "mwappimgs.cc";
 const ASSET_PREFIX = "/__assets__";
 
@@ -21,7 +20,6 @@ export default async function handler(req) {
 
   const targetUrl = "https://" + realTargetHost + realPath + url.search;
 
-  // 1. 克隆并修正请求头
   const newHeaders = new Headers();
   req.headers.forEach((value, key) => {
     if (key.toLowerCase() !== 'host') {
@@ -53,7 +51,6 @@ export default async function handler(req) {
     const resHeaders = new Headers();
     response.headers.forEach((v, k) => resHeaders.set(k, v));
 
-    // 全局注入 CORS 支持
     resHeaders.set('Access-Control-Allow-Origin', '*');
     resHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     resHeaders.set('Access-Control-Allow-Headers', '*');
@@ -81,20 +78,18 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
-      // 1. 优先注入 JS API 劫持防御与无缝自动阅读巡航引擎脚本
       const apiAndAutoReadScript = `
       <script>
         (function blockMobilePopupsAndAutoRead() {
           var currentHost = window.location.host;
 
-          // --- 第一部分：移动端弹窗与点击劫持防御 ---
+          // 防弹窗/强弹拦截
           var nativeOpen = window.open;
           window.open = function(url, target, features) {
             if (!url) return null;
             try {
               var targetUrl = new URL(url, window.location.href);
               if (targetUrl.host !== currentHost) {
-                console.warn('[Edge 防护] 已成功拦截跨域移动端强弹外链:', url);
                 return null;
               }
             } catch (e) {
@@ -111,7 +106,6 @@ export default async function handler(req) {
                 if (href && (href.includes('9527') || href.includes('.vip') || (href.startsWith('http') && !href.includes(currentHost)))) {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.warn('[Edge 防护] 已成功拦截移动端触屏点击劫持外链:', href);
                   return false;
                 }
               }
@@ -119,7 +113,7 @@ export default async function handler(req) {
             }
           }, true);
 
-          // --- 第二部分：无缝自动阅读与平滑倍速巡航引擎 ---
+          // 自动阅读与拓扑跳转引擎
           var CONFIG = {
             speedMultiplier: 2.5,
             bottomThreshold: 80
@@ -127,6 +121,41 @@ export default async function handler(req) {
 
           var isRunning = false;
           var animationFrameId = null;
+
+          function verifyUrlTopology(currentUrlStr, targetHref) {
+            try {
+              var cur = new URL(currentUrlStr);
+              var tgt = new URL(targetHref, currentUrlStr);
+
+              if (tgt.host !== cur.host) return false;
+
+              var curParts = cur.pathname.split('/').filter(Boolean);
+              var tgtParts = tgt.pathname.split('/').filter(Boolean);
+
+              if (curParts.length !== tgtParts.length) return false;
+
+              for (var i = 0; i < curParts.length - 1; i++) {
+                if (curParts[i] !== tgtParts[i]) return false;
+              }
+
+              var parseChapterNum = function(str) {
+                var base = str.split('.')[0];
+                var mainId = base.split('_')[0];
+                return parseInt(mainId, 10);
+              };
+
+              var curNum = parseChapterNum(curParts[curParts.length - 1]);
+              var tgtNum = parseChapterNum(tgtParts[tgtParts.length - 1]);
+
+              if (!isNaN(curNum) && !isNaN(tgtNum)) {
+                return tgtNum >= curNum;
+              }
+
+              return true;
+            } catch (e) {
+              return false;
+            }
+          }
 
           function smoothScrollStep() {
             if (!isRunning) return;
@@ -136,7 +165,6 @@ export default async function handler(req) {
             var distanceToBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
 
             if (distanceToBottom <= CONFIG.bottomThreshold) {
-              console.log('[无缝自动阅读] 检测到触底，执行精准跨章跳转...');
               isRunning = false;
               cancelAnimationFrame(animationFrameId);
               triggerNextChapter();
@@ -149,23 +177,21 @@ export default async function handler(req) {
           function triggerNextChapter() {
             sessionStorage.setItem('AUTO_READ_ENABLED', '1');
 
-            var pathParts = window.location.pathname.split('/').filter(Boolean);
-            var nextBtn = document.querySelector('#next_chapter, a.next-chapter, #next');
+            var currentUrl = window.location.href;
+            var candidates = Array.from(document.querySelectorAll('#next_chapter, a.next-chapter, #next, .bottomMenu a, .tooltip-bar a'));
+            
+            var validNodes = candidates.filter(function(a) {
+              var href = a.getAttribute('href');
+              return href && verifyUrlTopology(currentUrl, href);
+            });
 
-            if (!nextBtn) {
-              var links = Array.from(document.querySelectorAll('.tooltip-bar a, .bottomMenu a, .cm-topbar a'));
-              nextBtn = links.find(function(a) {
-                var href = a.getAttribute('href') || '';
-                var currentComicPath = '/comic/' + (pathParts[1] || '');
-                return href.includes('/comic/') && href !== currentComicPath && !href.endsWith(currentComicPath + '/');
-              });
-            }
-
-            if (nextBtn) {
-              console.log('[无缝自动阅读] 已精准锁定下一章跳转:', nextBtn.href);
-              nextBtn.click();
+            if (validNodes.length > 0) {
+              // 优先选择匹配的节点（如优先进 _3 页）
+              var targetNode = validNodes[validNodes.length - 1];
+              console.log('[无缝自动阅读] 拓扑校验成功，即刻精准跳转:', targetNode.href);
+              targetNode.click();
             } else {
-              console.warn('[无缝自动阅读] 无法找到下一章链接（可能已是最后一章），已暂停。');
+              console.warn('[无缝自动阅读] 未查找到可用的下一章节点，停止自动巡航');
               sessionStorage.removeItem('AUTO_READ_ENABLED');
             }
           }
@@ -202,14 +228,13 @@ export default async function handler(req) {
             }
 
             if (sessionStorage.getItem('AUTO_READ_ENABLED') === '1') {
-              console.log('[无缝自动阅读] 识别到跨章接续标记，即将恢复平滑滚动...');
+              console.log('[无缝自动阅读] 跨章识别接续，恢复平滑滚动');
               setTimeout(toggleAutoRead, 1200);
             }
           });
         })();
       </script>`;
 
-      // 2. 注入 CSS 防护
       const adShield = `
       <style>
         a[href][target][rel][style],
@@ -285,7 +310,6 @@ export default async function handler(req) {
       text = text.replace('<head>', '<head>' + apiAndAutoReadScript);
       text = text.replace('</head>', adShield + '</head>');
 
-      // 3. 注入白名单 DOM 软掩蔽沙盒脚本
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
@@ -388,7 +412,6 @@ export default async function handler(req) {
 
       text = text.replace('</body>', domWhitelistSandbox + '</body>');
 
-      // 域名重写与资源路径映射
       text = text.replace(new RegExp("https://" + ASSET_HOST, 'g'), ASSET_PREFIX);
       text = text.replace(new RegExp("https://" + targetHost, 'g'), "https://" + myHost);
 
