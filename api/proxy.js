@@ -1,4 +1,5 @@
 
+
 export const config = {
   runtime: 'edge',
 };
@@ -275,6 +276,12 @@ export default async function handler(req) {
           visibility: hidden !important;
         }
 
+        /* 恢复分页容器可见 */
+        #pagination-container {
+          display: block !important;
+          visibility: visible !important;
+        }
+
         .tooltip-bar, .bottomMenu {
           background: transparent !important;
           border: none !important;
@@ -328,6 +335,7 @@ export default async function handler(req) {
             '.circle-box',
             '#autoscroll',
             '#chapter-list-button-desktop',
+            'pagination-container',
             'script',
             'style',
             'link'
