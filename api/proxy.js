@@ -324,8 +324,12 @@ export default async function handler(req) {
                 img.removeAttribute('width');
                 img.removeAttribute('height');
                 // 用 JS style.setProperty 覆盖内联样式（比 CSS !important 更强）
-                img.style.setProperty('width', '100%', 'important');
-                img.style.setProperty('max-width', '100%', 'important');
+                // 腾讯漫画风格：PC端最大宽度1000px居中，移动端100%铺满
+                var winWidth = window.innerWidth;
+                var imgWidth = winWidth <= 599 ? '100%' : 'auto';
+                var imgMaxWidth = winWidth <= 599 ? '100%' : '1000px';
+                img.style.setProperty('width', imgWidth, 'important');
+                img.style.setProperty('max-width', imgMaxWidth, 'important');
                 img.style.setProperty('height', 'auto', 'important');
                 img.style.setProperty('display', 'block', 'important');
               });
@@ -333,7 +337,8 @@ export default async function handler(req) {
               var parents = container.querySelectorAll('figure, div');
               parents.forEach(function(parent) {
                 parent.style.setProperty('width', '100%', 'important');
-                parent.style.setProperty('max-width', '100%', 'important');
+                var winWidth2 = window.innerWidth;
+                parent.style.setProperty('max-width', winWidth2 <= 599 ? '100%' : '1000px', 'important');
                 parent.style.setProperty('margin', '0', 'important');
                 parent.style.setProperty('padding', '0', 'important');
               });
@@ -343,8 +348,9 @@ export default async function handler(req) {
             allImgs.forEach(function(img) {
               // 只处理在 #showimgcontent 或 .episode-detail 或 .cImg 内的图片
               if (img.closest('#showimgcontent, .episode-detail, .cImg, .epContent')) {
-                img.style.setProperty('width', '100%', 'important');
-                img.style.setProperty('max-width', '100%', 'important');
+                var winWidth3 = window.innerWidth;
+                img.style.setProperty('width', winWidth3 <= 599 ? '100%' : 'auto', 'important');
+                img.style.setProperty('max-width', winWidth3 <= 599 ? '100%' : '1000px', 'important');
                 img.style.setProperty('height', 'auto', 'important');
               }
             });
@@ -517,12 +523,27 @@ export default async function handler(req) {
           display: none !important;
         }
 
-        /* === PC 端铺满全屏适配 === */
-        /* 解除 .epContent.episode-detail 的 768px 宽度限制和左右 190.5px 外边距 */
+        /* === PC 端腾讯漫画风格适配（居中 + 舒适阅读宽度） === */
+        /* 参考腾讯漫画：PC端最大宽度1000px居中显示，两侧留白 */
         @media (min-width: 600px) {
-          /* 暴力解除所有可能的父级宽度限制 */
-          html, body, #showimgcontent, .episode-detail, .epContent,
-          #page-marker-1, .p15, .cImg, figure.cImg,
+          /* 页面主体：限制最大宽度并居中 */
+          html, body {
+            max-width: 100% !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+            padding: 0 !important;
+          }
+          /* 漫画内容容器：最大宽度1000px居中 */
+          #showimgcontent, .episode-detail, .epContent,
+          #page-marker-1, .p15, .cImg, figure.cImg {
+            max-width: 1000px !important;
+            width: 100% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-left: 15px !important;
+            padding-right: 15px !important;
+          }
+          /* 解除其他可能的父级宽度限制（但不超过1000px） */
           div[style*="width: 720"], div[style*="width:720"],
           div[style*="width: 768"], div[style*="width:768"],
           section, article, main, .container, .content, .main,
@@ -530,12 +551,12 @@ export default async function handler(req) {
           .wrapper, .page-content, .content-wrapper, .main-content {
             max-width: 100% !important;
             width: 100% !important;
-            margin-left: 0 !important;
-            margin-right: 0 !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
             padding-left: 0 !important;
             padding-right: 0 !important;
           }
-          /* 强制所有漫画图片铺满容器，覆盖内联样式 */
+          /* 强制所有漫画图片：居中显示，不超过1000px */
           #showimgcontent img,
           .episode-detail img,
           .cImg img,
@@ -546,8 +567,8 @@ export default async function handler(req) {
           #showimgcontent figure img,
           .episode-detail img[style*="width"],
           #showimgcontent img[style*="width"] {
-            width: 100% !important;
-            max-width: 100% !important;
+            width: auto !important;
+            max-width: 1000px !important;
             height: auto !important;
             display: block !important;
             margin: 0 auto !important;
@@ -556,7 +577,7 @@ export default async function handler(req) {
           figure, figcaption {
             max-width: 100% !important;
             width: 100% !important;
-            margin: 0 !important;
+            margin: 0 auto !important;
             padding: 0 !important;
           }
           /* 强制解除 body > div 等直接子级的宽度限制 */
@@ -566,9 +587,8 @@ export default async function handler(req) {
           }
         }
 
-        /* === 移动端内容适配 === */
+        /* === 移动端内容适配（小屏幕保持铺满） === */
         @media (max-width: 599px) {
-          /* 移动端也铺满 */
           html, body {
             width: 100% !important;
             max-width: 100% !important;
@@ -586,20 +606,24 @@ export default async function handler(req) {
             width: 100% !important;
             max-width: 100% !important;
             height: auto !important;
+            display: block !important;
+            margin: 0 auto !important;
           }
         }
 
-        /* === 超宽屏适配（2K/4K 显示器） === */
+        /* === 超宽屏适配（2K/4K 显示器，最大1200px居中） === */
         @media (min-width: 1920px) {
           #showimgcontent, .episode-detail, .epContent {
-            max-width: 100% !important;
+            max-width: 1200px !important;
             width: 100% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
           }
           #showimgcontent img,
           .episode-detail img,
           .cImg img {
             width: auto !important;
-            max-width: 100% !important;
+            max-width: 1200px !important;
             height: auto !important;
             display: block !important;
             margin: 0 auto !important;
