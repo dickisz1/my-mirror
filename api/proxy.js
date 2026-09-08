@@ -1,5 +1,4 @@
 
-
 export const config = {
   runtime: 'edge',
 };
@@ -7,10 +6,37 @@ export const config = {
 const ASSET_HOST = "mwappimgs.cc";
 const ASSET_PREFIX = "/__assets__";
 
+// === 广告域名黑名单（代理层直接拦截） ===
+const AD_DOMAINS = [
+  'ezze0ct.com',
+  'hokkid5.com',
+  '4i5pi9b.com',
+  'lglef6c.com',
+  'osxakod.com',
+  '8161gc.ezze0ct.com',
+  '6863gc.ezze0ct.com',
+  '8161g.hokkid5.com',
+  '6863g.hokkid5.com',
+  'gw.4i5pi9b.com',
+  'gw.lglef6c.com',
+  'gw.osxakod.com',
+];
+
 export default async function handler(req) {
   const targetHost = "manwari.cc";
   const url = new URL(req.url);
   const myHost = url.host;
+
+  // === 代理层拦截广告域名请求 ===
+  const requestHost = url.hostname;
+  for (const adDomain of AD_DOMAINS) {
+    if (requestHost.includes(adDomain)) {
+      return new Response(
+        JSON.stringify({ error: 'Ad request blocked', domain: adDomain }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  }
 
   let realTargetHost = targetHost;
   let realPath = url.pathname;
@@ -80,10 +106,74 @@ export default async function handler(req) {
     if (contentType.includes('text/html')) {
       let text = await response.text();
 
+      // === 注入：防弹窗 + 自动阅读 + 广告拦截 JS ===
       const apiAndAutoReadScript = `
       <script>
         (function blockMobilePopupsAndAutoRead() {
           var currentHost = window.location.host;
+
+          // === 广告域名关键词 ===
+          var AD_KEYWORDS = ['ezze0ct', 'hokkid5', '4i5pi9b', 'lglef6c', 'osxakod', '8161gc', '6863gc', 'gg.js'];
+
+          // === 拦截 WebSocket 广告连接 ===
+          var _origWebSocket = window.WebSocket;
+          window.WebSocket = function(url) {
+            if (typeof url === 'string') {
+              for (var k = 0; k < AD_KEYWORDS.length; k++) {
+                if (url.indexOf(AD_KEYWORDS[k]) !== -1) {
+                  console.log('[广告拦截] WebSocket 被拦截:', url);
+                  return { close: function(){}, onopen: null, onmessage: null, onclose: null, onerror: null };
+                }
+              }
+            }
+            return new _origWebSocket(url);
+          };
+
+          // === 拦截动态脚本注入 ===
+          var _origCreateElement = document.createElement.bind(document);
+          document.createElement = function(tag) {
+            var el = _origCreateElement(tag);
+            if (tag && tag.toLowerCase() === 'script') {
+              var _origSrcSetter = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src').set;
+              Object.defineProperty(el, 'src', {
+                set: function(url) {
+                  for (var k = 0; k < AD_KEYWORDS.length; k++) {
+                    if (url && url.indexOf(AD_KEYWORDS[k]) !== -1) {
+                      console.log('[广告拦截] 脚本注入被拦截:', url);
+                      return;
+                    }
+                  }
+                  _origSrcSetter.call(this, url);
+                },
+                configurable: true
+              });
+            }
+            return el;
+          };
+
+          // === 拦截 location 跳转到广告 ===
+          var _origLocationHrefSetter = Object.getOwnPropertyDescriptor(
+            Object.getOwnPropertyDescriptor(window, 'location') || window, 'href'
+          ) ? null : null;
+          try {
+            var locProto = Object.getPrototypeOf(window.location);
+            var origHrefDesc = Object.getOwnPropertyDescriptor(locProto, 'href');
+            if (origHrefDesc && origHrefDesc.set) {
+              var origHrefSet = origHrefDesc.set;
+              Object.defineProperty(locProto, 'href', {
+                set: function(url) {
+                  for (var k = 0; k < AD_KEYWORDS.length; k++) {
+                    if (url && url.indexOf(AD_KEYWORDS[k]) !== -1) {
+                      console.log('[广告拦截] location.href 跳转被拦截:', url);
+                      return;
+                    }
+                  }
+                  origHrefSet.call(this, url);
+                },
+                configurable: true
+              });
+            }
+          } catch(e) {}
 
           // 防弹窗/强弹拦截
           var nativeOpen = window.open;
@@ -188,7 +278,6 @@ export default async function handler(req) {
             });
 
             if (validNodes.length > 0) {
-              // 优先选择匹配的节点（如优先进 _3 页）
               var targetNode = validNodes[validNodes.length - 1];
               console.log('[无缝自动阅读] 拓扑校验成功，即刻精准跳转:', targetNode.href);
               targetNode.click();
@@ -237,8 +326,10 @@ export default async function handler(req) {
         })();
       </script>`;
 
+      // === 注入：广告屏蔽 CSS ===
       const adShield = `
       <style>
+        /* 基础广告元素 */
         a[href][target][rel][style],
         div.footer-float-icon,
         i.fas.fa-times,
@@ -254,6 +345,7 @@ export default async function handler(req) {
           top: -9999px !important;
         }
 
+        /* SweetAlert 弹窗 */
         .swal2-container,
         .swal2-popup,
         .swal2-backdrop-show,
@@ -265,30 +357,30 @@ export default async function handler(req) {
           pointer-events: none !important;
         }
 
+        /* 页面布局修复 */
         html, body {
           overflow: auto !important;
           position: static !important;
           height: auto !important;
         }
 
+        /* 分页容器（先隐藏再恢复） */
         #pagination-container, .pagination-container {
           display: none !important;
           visibility: hidden !important;
         }
-
-        /* 恢复分页容器可见 */
         #pagination-container {
           display: block !important;
           visibility: visible !important;
         }
 
+        /* 工具栏/底部菜单背景透明但保留可点击 */
         .tooltip-bar, .bottomMenu {
           background: transparent !important;
           border: none !important;
           box-shadow: none !important;
           pointer-events: none !important;
         }
-
         .tooltip-bar a, 
         .bottomMenu a, 
         #chapter-list-button-desktop,
@@ -297,6 +389,44 @@ export default async function handler(req) {
         #autoscroll {
           pointer-events: auto !important;
           cursor: pointer !important;
+        }
+
+        /* === 广告屏蔽增强规则 === */
+        /* 屏蔽 takeover-notification（全屏弹窗广告） */
+        .takeover-notification,
+        .takeover-box,
+        .takeover-overlay,
+        .takeover-ad {
+          display: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+
+        /* 屏蔽隐形遮罩层（广告用的透明覆盖 div） */
+        div[style*="position:fixed"][style*="z-index:100"],
+        div[style*="position: fixed"][style*="z-index: 100"],
+        div[style*="opacity:0.01"],
+        div[style*="opacity: 0.01"],
+        div[style*="z-index:99999"],
+        div[style*="z-index: 99999"] {
+          display: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+
+        /* 屏蔽 gg.js 相关的 style 元素 */
+        #vjyfhmpi_style_id,
+        #llwlqyfx_style_id {
+          display: none !important;
+        }
+
+        /* 屏蔽 ball 相关广告元素 */
+        .ball-ad,
+        [id*="ball"],
+        [class*="ball-ad"] {
+          display: none !important;
         }
 
         @media (min-width: 600px) {
@@ -318,6 +448,7 @@ export default async function handler(req) {
       text = text.replace('<head>', '<head>' + apiAndAutoReadScript);
       text = text.replace('</head>', adShield + '</head>');
 
+      // === DOM 白名单沙箱（已将 pagination-container 加入白名单） ===
       const domWhitelistSandbox = `
       <script>
         (function applyDOMWhitelistSandbox() {
