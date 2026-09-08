@@ -2,6 +2,7 @@
 
 
 
+
 export const config = {
   runtime: 'edge',
 };
@@ -347,6 +348,11 @@ export default async function handler(req) {
                 img.style.setProperty('height', 'auto', 'important');
               }
             });
+            // === 同时隐藏顶部导航栏（JS 兜底） ===
+            var topbars = document.querySelectorAll('.cm-topbar_container, .cm-topbar, header.cm-topbar, div[class*="topbar"]');
+            topbars.forEach(function(tb) {
+              tb.style.setProperty('display', 'none', 'important');
+            });
             console.log('[漫画铺满] 已执行解锁，当前页面图片数:', allImgs ? allImgs.length : 0);
           }
 
@@ -429,6 +435,33 @@ export default async function handler(req) {
           visibility: visible !important;
         }
 
+        /* === 隐藏顶部导航栏（遮挡漫画） === */
+        .cm-topbar_container,
+        .cm-topbar,
+        .cm-topbar--fixed,
+        .cm-topbar--absolute,
+        header.cm-topbar,
+        div[class*="topbar"],
+        div[class*="TopBar"],
+        div[class*="header"],
+        .site-header,
+        header[class*="top"],
+        .navbar,
+        .top-nav,
+        .header-bar,
+        .header-wrapper {
+          display: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          position: fixed !important;
+          top: -9999px !important;
+          left: -9999px !important;
+          width: 0 !important;
+          height: 0 !important;
+          overflow: hidden !important;
+          z-index: -1 !important;
+        }
+
         /* 工具栏/底部菜单背景透明但保留可点击 */
         .tooltip-bar, .bottomMenu {
           background: transparent !important;
@@ -492,7 +525,9 @@ export default async function handler(req) {
           #page-marker-1, .p15, .cImg, figure.cImg,
           div[style*="width: 720"], div[style*="width:720"],
           div[style*="width: 768"], div[style*="width:768"],
-          section, article, main, .container, .content, .main {
+          section, article, main, .container, .content, .main,
+          .row, .col, .col-xs-12, .col-sm-12, .col-md-12, .col-lg-12,
+          .wrapper, .page-content, .content-wrapper, .main-content {
             max-width: 100% !important;
             width: 100% !important;
             margin-left: 0 !important;
@@ -508,8 +543,62 @@ export default async function handler(req) {
           img.lazy-image,
           img[width][height],
           .episode-detail figure img,
-          #showimgcontent figure img {
+          #showimgcontent figure img,
+          .episode-detail img[style*="width"],
+          #showimgcontent img[style*="width"] {
             width: 100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+            display: block !important;
+            margin: 0 auto !important;
+          }
+          /* 强制解除 figure/figcaption 的默认样式 */
+          figure, figcaption {
+            max-width: 100% !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          /* 强制解除 body > div 等直接子级的宽度限制 */
+          body > div, body > div > div, body > div > div > div {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+        }
+
+        /* === 移动端内容适配 === */
+        @media (max-width: 599px) {
+          /* 移动端也铺满 */
+          html, body {
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-x: hidden !important;
+          }
+          #showimgcontent, .episode-detail, .epContent, .cImg {
+            width: 100% !important;
+            max-width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+          #showimgcontent img,
+          .episode-detail img,
+          .cImg img {
+            width: 100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+          }
+        }
+
+        /* === 超宽屏适配（2K/4K 显示器） === */
+        @media (min-width: 1920px) {
+          #showimgcontent, .episode-detail, .epContent {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+          #showimgcontent img,
+          .episode-detail img,
+          .cImg img {
+            width: auto !important;
             max-width: 100% !important;
             height: auto !important;
             display: block !important;
