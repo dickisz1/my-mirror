@@ -1,6 +1,7 @@
 
 
 
+
 export const config = {
   runtime: 'edge',
 };
@@ -110,7 +111,7 @@ export default async function handler(req) {
 
       // === 注入：防弹窗 + 自动阅读 + 广告拦截 JS ===
       const apiAndAutoReadScript = `
-      <script>
+      <script id="unlock-comic-script">
         (function blockMobilePopupsAndAutoRead() {
           var currentHost = window.location.host;
 
@@ -313,7 +314,8 @@ export default async function handler(req) {
 
           // === 解锁漫画图片铺满全屏（JS 强制覆盖内联样式） ===
           function unlockComicImages() {
-            var containers = document.querySelectorAll('#showimgcontent, .episode-detail');
+            // 暴力选择所有可能的容器和图片
+            var containers = document.querySelectorAll('#showimgcontent, .episode-detail, .epContent, .cImg, figure.cImg, #page-marker-1, .p15');
             containers.forEach(function(container) {
               var imgs = container.querySelectorAll('img');
               imgs.forEach(function(img) {
@@ -335,6 +337,17 @@ export default async function handler(req) {
                 parent.style.setProperty('padding', '0', 'important');
               });
             });
+            // 额外暴力处理：直接对所有 img 生效（兜底）
+            var allImgs = document.querySelectorAll('img');
+            allImgs.forEach(function(img) {
+              // 只处理在 #showimgcontent 或 .episode-detail 或 .cImg 内的图片
+              if (img.closest('#showimgcontent, .episode-detail, .cImg, .epContent')) {
+                img.style.setProperty('width', '100%', 'important');
+                img.style.setProperty('max-width', '100%', 'important');
+                img.style.setProperty('height', 'auto', 'important');
+              }
+            });
+            console.log('[漫画铺满] 已执行解锁，当前页面图片数:', allImgs ? allImgs.length : 0);
           }
 
           // DOM 加载完成后立即执行
@@ -370,7 +383,7 @@ export default async function handler(req) {
 
       // === 注入：广告屏蔽 CSS ===
       const adShield = `
-      <style>
+      <style id="unlock-width-style">
         /* 基础广告元素 */
         a[href][target][rel][style],
         div.footer-float-icon,
@@ -474,27 +487,33 @@ export default async function handler(req) {
         /* === PC 端铺满全屏适配 === */
         /* 解除 .epContent.episode-detail 的 768px 宽度限制和左右 190.5px 外边距 */
         @media (min-width: 600px) {
-          .epContent.episode-detail,
-          #showimgcontent,
-          #page-marker-1,
-          .p15,
-          .cImg,
-          figure.cImg {
+          /* 暴力解除所有可能的父级宽度限制 */
+          html, body, #showimgcontent, .episode-detail, .epContent,
+          #page-marker-1, .p15, .cImg, figure.cImg,
+          div[style*="width: 720"], div[style*="width:720"],
+          div[style*="width: 768"], div[style*="width:768"],
+          section, article, main, .container, .content, .main {
             max-width: 100% !important;
             width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
           }
           /* 强制所有漫画图片铺满容器，覆盖内联样式 */
           #showimgcontent img,
           .episode-detail img,
           .cImg img,
           img.calwh,
-          img.lazy-image {
+          img.lazy-image,
+          img[width][height],
+          .episode-detail figure img,
+          #showimgcontent figure img {
             width: 100% !important;
             max-width: 100% !important;
             height: auto !important;
             display: block !important;
+            margin: 0 auto !important;
           }
         }
         #cp_img img, #cp_img img.auto-loaded-img {
@@ -502,8 +521,8 @@ export default async function handler(req) {
         }
       </style>`;
 
-      text = text.replace('<head>', '<head>' + apiAndAutoReadScript);
-      text = text.replace('</head>', adShield + '</head>');
+      text = text.replace(/<head(\s[^>]*)?>|<head>/i, '<head>' + apiAndAutoReadScript);
+      text = text.replace(/<\/head>/i, adShield + '</head>');
 
       // === DOM 白名单沙箱（已将 pagination-container 加入白名单） ===
       const domWhitelistSandbox = `
@@ -607,7 +626,7 @@ export default async function handler(req) {
         })();
       </script>`;
 
-      text = text.replace('</body>', domWhitelistSandbox + '</body>');
+      text = text.replace(/<\/body>/i, domWhitelistSandbox + '</body>');
 
       text = text.replace(new RegExp("https://" + ASSET_HOST, 'g'), ASSET_PREFIX);
       text = text.replace(new RegExp("https://" + targetHost, 'g'), "https://" + myHost);
