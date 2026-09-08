@@ -1,4 +1,5 @@
 
+
 export const config = {
   runtime: 'edge',
 };
@@ -429,15 +430,26 @@ export default async function handler(req) {
           display: none !important;
         }
 
+        /* === PC 端铺满全屏适配 === */
+        /* 解除 .epContent.episode-detail 的 768px 宽度限制和左右 190.5px 外边距 */
         @media (min-width: 600px) {
-          .main-content {
+          .epContent.episode-detail {
+            max-width: 100% !important;
             width: 100% !important;
-            max-width: 800px !important;
-            margin: 0 auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
           }
-          #cp_img.view-main-1 img {
+          /* 解除 .cImg 的 720px 宽度限制 */
+          .cImg {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+          /* 强制漫画图片铺满容器 */
+          #showimgcontent img,
+          .episode-detail img {
             width: 100% !important;
             max-width: 100% !important;
+            height: auto !important;
           }
         }
         #cp_img img, #cp_img img.auto-loaded-img {
