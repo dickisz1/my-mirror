@@ -1,5 +1,6 @@
 
 
+
 export const config = {
   runtime: 'edge',
 };
@@ -309,6 +310,46 @@ export default async function handler(req) {
             }
           }
 
+
+          // === 解锁漫画图片铺满全屏（JS 强制覆盖内联样式） ===
+          function unlockComicImages() {
+            var containers = document.querySelectorAll('#showimgcontent, .episode-detail');
+            containers.forEach(function(container) {
+              var imgs = container.querySelectorAll('img');
+              imgs.forEach(function(img) {
+                // 移除内联 width/height 属性
+                img.removeAttribute('width');
+                img.removeAttribute('height');
+                // 用 JS style.setProperty 覆盖内联样式（比 CSS !important 更强）
+                img.style.setProperty('width', '100%', 'important');
+                img.style.setProperty('max-width', '100%', 'important');
+                img.style.setProperty('height', 'auto', 'important');
+                img.style.setProperty('display', 'block', 'important');
+              });
+              // 同时解除父级 figure 和 div 的宽度限制
+              var parents = container.querySelectorAll('figure, div');
+              parents.forEach(function(parent) {
+                parent.style.setProperty('width', '100%', 'important');
+                parent.style.setProperty('max-width', '100%', 'important');
+                parent.style.setProperty('margin', '0', 'important');
+                parent.style.setProperty('padding', '0', 'important');
+              });
+            });
+          }
+
+          // DOM 加载完成后立即执行
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', unlockComicImages);
+          } else {
+            unlockComicImages();
+          }
+
+          // 监听 DOM 变化，处理懒加载图片
+          var imgObserver = new MutationObserver(function(mutations) {
+            unlockComicImages();
+          });
+          imgObserver.observe(document.body, { childList: true, subtree: true });
+
           document.addEventListener('DOMContentLoaded', function() {
             var autoScrollBtn = document.querySelector('#autoscroll');
             if (autoScrollBtn) {
@@ -433,23 +474,27 @@ export default async function handler(req) {
         /* === PC 端铺满全屏适配 === */
         /* 解除 .epContent.episode-detail 的 768px 宽度限制和左右 190.5px 外边距 */
         @media (min-width: 600px) {
-          .epContent.episode-detail {
+          .epContent.episode-detail,
+          #showimgcontent,
+          #page-marker-1,
+          .p15,
+          .cImg,
+          figure.cImg {
             max-width: 100% !important;
             width: 100% !important;
             margin: 0 !important;
             padding: 0 !important;
           }
-          /* 解除 .cImg 的 720px 宽度限制 */
-          .cImg {
-            max-width: 100% !important;
-            width: 100% !important;
-          }
-          /* 强制漫画图片铺满容器 */
+          /* 强制所有漫画图片铺满容器，覆盖内联样式 */
           #showimgcontent img,
-          .episode-detail img {
+          .episode-detail img,
+          .cImg img,
+          img.calwh,
+          img.lazy-image {
             width: 100% !important;
             max-width: 100% !important;
             height: auto !important;
+            display: block !important;
           }
         }
         #cp_img img, #cp_img img.auto-loaded-img {
