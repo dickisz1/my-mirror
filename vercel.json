@@ -1,9 +1,17 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "rewrites": [
     {
       "source": "/(.*)",
       "destination": "/api/proxy"
     }
-  ]
+  ],
+  "functions": {
+    "api/proxy.js": {
+      "includeFiles": "manga_reader.html",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
