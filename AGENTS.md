@@ -102,7 +102,7 @@ my-mirror/
 6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
 7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，645 行）
+### `manga_reader.html`（前端，981 行）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
@@ -115,6 +115,9 @@ my-mirror/
    - 详情（`openDetail`）：漫画信息 + 章节列表
    - 阅读器（`openChapter` / `setupLazy`）：图片懒加载 + 阅读进度条
    - **连续阅读**（`toggleContinuous` / `preloadNextChapter` / `setupContinuousLoader`）：滚到底自动把下一话图片追加到页面底部，不翻页
+   - **显示设置**（`setImgWidth` / `setBrightness` / `loadReaderPrefs`）：图片宽度三档（fit/full/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
+   - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
+   - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
 4. **阅读历史**：`localStorage` 存储最近 20 本阅读记录
 5. **书源规则面板**：`renderRulesPanel()` 展示当前生效的规则（调试用）
 6. **启动流程**：`boot()` → 拉取权威规则 → 渲染首页
@@ -125,6 +128,19 @@ my-mirror/
 - 底部哨兵 `#readerSentinel` 必须始终是 `#readerArea` 的最后一个子节点，由 `ensureSentinel()` 统一维护；追加新章节后必须再次调用它，否则滚动触发点会跑到页面中间。
 - 新章节起始下标以 `state.flatImgs.length` 为准，不要用 `querySelectorAll('.cimg').length`（图片加载失败被移除后会错位）。
 - 离开阅读器或关闭开关时，需断开 `observer` 与 `continuousObserver` 并清理 `state.flatImgs` / `loadedChaps`。
+
+#### 两个"话号"的区别（易错点）
+
+- `state.chapIdx` = **最后已加载话**，用于驱动预加载。
+- `state.viewChapIdx` = **视口所在话**，用于顶栏 meta、进度文本、历史记录、跳转面板高亮。
+- 显示与记录一律用 `viewChapIdx`；用 `chapIdx` 会导致"连续阅读下历史记成最新一话""进度条随预加载倒退""标题剧透"。
+
+#### 显示设置与宽度模式的约定
+
+- `state.imgWidth` ∈ `fit` / `full` / `orig`；`fit` 不加载任何类，`full`/`orig` 额外给 `body` 加 `reader-wide` 类，用于突破 `.container{max-width:1200px}` 的限宽——否则"铺满全宽"实际铺不满。
+- `applyImgWidth()` 在 `openChapter` 重新渲染后必须再调用一次（`#readerArea` 元素本身没换，但需保证 class 与状态一致）。
+- 亮度通过 `#readerArea` 的 `--reader-brightness` CSS 变量驱动 `filter:brightness()`，不要直接写 `filter` 内联样式。
+- 设置持久化在 `localStorage.manga_prefs`，与 `manga_history` / `manga_pos` 相互独立。
 
 ### `vercel.json`（部署配置）
 

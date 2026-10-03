@@ -164,6 +164,36 @@ preloadNextChapter():
 用户继续下滑 → 哨兵再次进入视口 → 自动加载再下一话（循环直到最后一话）
 ```
 
+### 显示设置与章节跳转的数据流
+
+```
+用户点「🎨 设置」(toggleReaderTools)
+   │
+   ├── 图片宽度：setImgWidth('fit'|'full'|'orig')
+   │     └── applyImgWidth()：给 #readerArea 加 w-full / w-orig，
+   │         并给 <body> 加 reader-wide 解除 .container 限宽
+   │
+   └── 亮度：setBrightness(30–130)
+         └── applyBrightness()：设置 #readerArea 的 --reader-brightness
+              CSS 变量 → filter:brightness()
+   │
+   ▼
+saveReaderPrefs() → localStorage.manga_prefs
+   │
+   ▼
+下次启动 boot() → loadReaderPrefs() → 恢复宽度模式与亮度
+
+用户点「📖 章节」(openJumpPanel)
+   │
+   ▼
+按 state.chapters 渲染浮层列表，state.viewChapIdx 对应的项高亮
+   │
+   ▼
+点某一话 → jumpToChapter(i) → closeJumpPanel() → openChapter(i)
+（点当前话直接返回，不重新加载）
+Esc 或点 ✕ → closeJumpPanel()
+```
+
 ## 各逻辑层职责
 
 ### 1. 前端 UI 层 (`manga_reader.html`)
@@ -176,6 +206,7 @@ preloadNextChapter():
 - 修改 API 客户端逻辑
 - 修改书源规则配置
 - 新增阅读模式（连续阅读、双页等），但图片地址必须统一走 `state.flatImgs`
+- 新增阅读器内的显示选项（宽度/亮度等），设置统一存 `localStorage.manga_prefs`
 
 **禁止：**
 - 写网络代理逻辑
@@ -261,6 +292,9 @@ preloadNextChapter():
 6. **HTML 类名/ID**：前端 JS 中大量使用 `querySelector` 选择器（如 `#readerArea`、`.cimg`、`.imgwrap`），改了类名会导致图片不显示
 7. **连续阅读的索引契约**：图片 `data-i` 是跨章节全局连续下标，与 `state.flatImgs` 一一对应；`#readerSentinel` 必须始终是 `#readerArea` 的最后一个子节点
 8. **运行时**：`api/proxy.js` 依赖 `fs`/`path`/`http`/`https`/`crypto`，不能改成 Edge Runtime
+9. **两个话号的语义**：`chapIdx` = 最后已加载话（驱动预加载），`viewChapIdx` = 视口所在话（显示/历史/跳转高亮）。不可混用
+10. **宽度模式与限宽**：`full`/`orig` 依赖 `body.reader-wide` 解除 `.container` 的 1200px 限宽；改动 `.container` 样式时须一并检查
+11. **localStorage 键**：`manga_history`（历史）、`manga_pos`（话内位置）、`manga_prefs`（显示设置）三者独立，改名会导致用户数据丢失
 
 ## 风险清单
 
