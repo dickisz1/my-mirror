@@ -77,11 +77,14 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 #readerTools button.active,#readerTools button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 #readerTools input[type=range]{width:150px;accent-color:var(--accent)}
 #readerTools .val{color:var(--mut);min-width:38px;text-align:right}
-/* 宽度模式：w-fit 适应宽度 / w-full 铺满全宽 / w-orig 原始尺寸
-   注意：阅读器嵌在 .container{max-width:1200px} 内，铺满/原始尺寸需突破该限制 */
+/* 宽度模式：w-fit 适应宽度 / w-orig 原始尺寸 / w-pct 自定义百分比（滑杆）
+   注意：阅读器嵌在 .container{max-width:1200px} 内，铺满/自定义/原始尺寸需突破该限制 */
 body.reader-wide .container{max-width:none;padding:0}
 #readerArea.w-full{max-width:100%;padding:0}
 #readerArea.w-full .imgwrap{border-radius:0}
+/* 自定义百分比：宽度 = 视口宽度的 --reader-w（vw 单位），突破 container 限宽 */
+#readerArea.w-pct{width:var(--reader-w,100vw);max-width:100%;padding:0;margin:0 auto}
+#readerArea.w-pct .imgwrap{border-radius:0}
 #readerArea.w-orig{max-width:100%;padding:0;overflow-x:auto}
 #readerArea.w-orig .imgwrap{width:fit-content;max-width:none;margin:0 auto 4px}
 #readerArea.w-orig .imgwrap img{width:auto;max-width:none}
@@ -176,9 +179,14 @@ body.reader-wide .container{max-width:none;padding:0}
     <div id="readerTools">
       <div class="row">
         <label>图片宽度</label>
+        <input type="range" id="widthRange" min="30" max="100" step="5" value="100" oninput="setImgWidthPct(this.value)">
+        <span class="val" id="widthVal">100%</span>
+      </div>
+      <div class="row">
+        <label></label>
         <button id="wbtn-fit"  onclick="setImgWidth('fit')">适应宽度</button>
-        <button id="wbtn-full" onclick="setImgWidth('full')">铺满全宽</button>
         <button id="wbtn-orig" onclick="setImgWidth('orig')">原始尺寸</button>
+        <span style="color:var(--mut);font-size:11px">滑杆拖到 100% 即铺满全宽</span>
       </div>
       <div class="row">
         <label>亮度</label>
@@ -300,7 +308,8 @@ const state = {
   chapRanges:[],     // 话 → 图片下标区间 [{idx,start,end,title,count}]
   viewChapIdx:0,     // 视口当前所在话（显示/历史用；chapIdx 仍是"最后已加载话"）
   viewPos:0,         // 视口当前图片下标（话内位置记忆）
-  imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / full 铺满全宽 / orig 原始尺寸
+  imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / orig 原始尺寸 / custom 自定义百分比
+  widthPct:100,      // 自定义宽度：阅读区宽度占视口的百分比（30–100）
   brightness:100     // 阅读区亮度百分比（30–130）
 };
 
@@ -793,13 +802,16 @@ function loadReaderPrefs(){
   try{
     const p = JSON.parse(localStorage.getItem('manga_prefs')||'{}');
     if(p.imgWidth) state.imgWidth = p.imgWidth;
+    if(typeof p.widthPct === 'number') state.widthPct = p.widthPct;
     if(typeof p.brightness === 'number') state.brightness = p.brightness;
   }catch(e){}
+  // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
+  if(state.imgWidth === 'full'){ state.imgWidth = 'custom'; state.widthPct = 100; }
   applyImgWidth();
   applyBrightness();
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, brightness:state.brightness})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness})); }catch(e){}
 }
 
 function toggleReaderTools(){
@@ -807,26 +819,43 @@ function toggleReaderTools(){
   if(p) p.classList.toggle('on');
 }
 
-/** 图片宽度模式：fit / full / orig */
+/** 图片宽度：预设模式 fit（适应宽度，800px 上限）/ orig（原始尺寸） */
 function setImgWidth(mode){
-  state.imgWidth = (mode==='full'||mode==='orig') ? mode : 'fit';
+  state.imgWidth = (mode === 'orig') ? 'orig' : 'fit';
+  applyImgWidth();
+  saveReaderPrefs();
+}
+/** 图片宽度：滑杆自定义百分比（视口宽度的 30–100%） */
+function setImgWidthPct(v){
+  let n = parseInt(v,10);
+  if(isNaN(n)) n = 100;
+  n = Math.min(100, Math.max(30, n));
+  state.widthPct = n;
+  state.imgWidth = 'custom';
   applyImgWidth();
   saveReaderPrefs();
 }
 function applyImgWidth(){
   const area = document.getElementById('readerArea');
   if(!area) return;
-  const wide = (state.imgWidth === 'full' || state.imgWidth === 'orig');
-  area.classList.remove('w-full','w-orig');
-  if(state.imgWidth === 'full') area.classList.add('w-full');
+  const custom = (state.imgWidth === 'custom');
+  const wide = custom || state.imgWidth === 'orig';   // 需突破 .container 限宽的模式
+  area.classList.remove('w-full','w-orig','w-pct');
   if(state.imgWidth === 'orig') area.classList.add('w-orig');
-  // 铺满/原始尺寸要突破 .container 的 1200px 限宽，否则"全宽"其实铺不满
+  if(custom) area.classList.add('w-pct');
+  // 自定义宽度：把百分比写进 CSS 变量，配合 #readerArea.w-pct{width:var(--reader-w)}
+  area.style.setProperty('--reader-w', state.widthPct + 'vw');
+  // 铺满/自定义/原始尺寸要突破 .container 的 1200px 限宽，否则"全宽"其实铺不满
   document.body.classList.toggle('reader-wide', wide);
-  // 同步按钮高亮
-  ['fit','full','orig'].forEach(m=>{
-    const b = document.getElementById('wbtn-'+m);
-    if(b) b.classList.toggle('active', state.imgWidth === m);
-  });
+  // 同步控件：滑杆 / 数值 / 预设按钮高亮
+  const r = document.getElementById('widthRange');
+  if(r) r.value = state.widthPct;
+  const v = document.getElementById('widthVal');
+  if(v) v.textContent = custom ? (state.widthPct + '%') : (state.imgWidth === 'orig' ? '原始' : '适应');
+  const bf = document.getElementById('wbtn-fit');
+  if(bf) bf.classList.toggle('active', state.imgWidth === 'fit');
+  const bo = document.getElementById('wbtn-orig');
+  if(bo) bo.classList.toggle('active', state.imgWidth === 'orig');
 }
 
 /** 亮度：作用于 #readerArea 的 CSS filter */
