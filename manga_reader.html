@@ -64,6 +64,9 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 .chap-sep .sep-title{color:var(--accent);font-weight:600;white-space:nowrap}
 #readerArea.continuous .imgwrap{margin-bottom:4px}
 #readerArea.continuous .imgwrap img{cursor:default}
+.progress-txt{font-size:11px;color:var(--mut);white-space:nowrap;min-width:64px;text-align:right}
+.imgretry{display:block;margin:12px auto;padding:6px 14px;background:transparent;border:1px solid var(--ln);color:var(--mut);border-radius:4px;cursor:pointer;font-size:12px}
+.imgretry:hover{border-color:var(--accent);color:var(--accent)}
 </style></head><body>
 
 <header>
@@ -125,6 +128,7 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
       <span class="rt-title" onclick="navigate('home')">漫蛙</span>
       <span class="rt-title" id="readerTitle"></span>
       <span class="meta" id="readerMeta"></span>
+      <span class="progress-txt" id="progressTxt">第 1 话</span>
       <div class="progress"><i id="progressBar"></i></div>
       <div class="controls">
         <button onclick="toggleChapters()">📖 章节</button>
@@ -136,7 +140,7 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换章节 | ↑ 顶部</div>
+    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格/PageDown 翻屏 | ↑↓/Home/End 顶部底部 | J/K 上下话</div>
   </div>
 </div>
 
@@ -234,13 +238,23 @@ const state = {
   continuous:false,   // 连续阅读模式
   loadedChaps:{},    // 已加载章节 {idx: true}
   loadingNext:false, // 正在加载下一章
-  flatImgs:[]        // 全局图片列表，下标 = 图片 data-i（跨章节连续）
+  flatImgs:[],       // 全局图片列表，下标 = 图片 data-i（跨章节连续）
+  chapRanges:[],     // 话 → 图片下标区间 [{idx,start,end,title,count}]
+  viewChapIdx:0,     // 视口当前所在话（显示/历史用；chapIdx 仍是"最后已加载话"）
+  viewPos:0          // 视口当前图片下标（话内位置记忆）
 };
 
 /* ============================================================
  * 四、导航
  * ============================================================ */
 function navigate(view){
+  const prev = state.view;
+  // 离开阅读器：先重算并落盘阅读进度（话号 + 话内位置），再清理状态
+  if(prev === 'reader' && view !== 'reader'){
+    updateProgressUI();   // 重算 state.viewChapIdx / viewPos（防止 rAF 节流漏掉最后一次滚动）
+    savePos();
+    saveHistory();
+  }
   state.view = view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   const el = document.getElementById('view-'+view);
@@ -249,19 +263,26 @@ function navigate(view){
   const map = {home:'btnHome', category:'btnCategory', search:'btnSearch'};
   if(map[view]) document.getElementById(map[view]).classList.add('active');
   window.scrollTo(0,0);
-  if(view !== 'reader' && state.continuous){
-    state.continuous = false;
+  if(view !== 'reader'){
+    // 阅读器状态一律清理（与是否开启连续阅读无关），避免残留；
+    // 进度已在上面落盘，openChapter 会重新填充这些状态
     state.loadedChaps = {};
     state.flatImgs = [];
+    state.chapRanges = [];
+    state.viewChapIdx = 0;
+    state.viewPos = 0;
     if(observer) observer.disconnect();
     if(continuousObserver) continuousObserver.disconnect();
-    const area = document.getElementById('readerArea');
-    if(area) area.classList.remove('continuous');
-    const btn = document.getElementById('btnContinuous');
-    if(btn){
-      btn.style.background = 'transparent';
-      btn.style.color = 'var(--mut)';
-      btn.style.borderColor = 'var(--ln)';
+    if(state.continuous){
+      state.continuous = false;
+      const area = document.getElementById('readerArea');
+      if(area) area.classList.remove('continuous');
+      const btn = document.getElementById('btnContinuous');
+      if(btn){
+        btn.style.background = 'transparent';
+        btn.style.color = 'var(--mut)';
+        btn.style.borderColor = 'var(--ln)';
+      }
     }
   }
   if(view==='home') renderHome();
@@ -410,18 +431,19 @@ async function openChapter(idx){
   const ch = state.chapters[idx];
   if(!ch) return;
   state.chapIdx = idx;
+  state.viewChapIdx = idx;
   navigate('reader');
   document.getElementById('readerTitle').textContent = state.comic ? state.comic.title : '';
   document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
   const area = document.getElementById('readerArea');
   area.innerHTML = '<div class="empty-state"><span class="spinner"></span>按图片规则取数中…</div>';
-  saveHistory();
 
   try{
     const d = await apiGet('/api/comic/image/' + ch.id, {page:1, page_size:500, image_source:''});
     const imgs = (d && d.images) || [];
     if(!imgs.length){ area.innerHTML = '<div class="empty-state">本话无图片</div>'; return; }
     state.flatImgs = imgs.slice();   // 下标 = data-i，跨章节连续
+    state.chapRanges = [{ idx: idx, start: 0, end: imgs.length-1, title: ch.title, count: imgs.length }];
     area.innerHTML = imgs.map((im,i)=>
       `<figure class="imgwrap loading" id="fig-${i}">
          <img class="cimg" data-i="${i}" alt="第${i+1}页" loading="lazy" onload="imgOk(this)" onerror="imgFail(this)">
@@ -434,13 +456,52 @@ async function openChapter(idx){
       setupContinuousLoader();
       preloadNextChapter();
     }
+    updateProgressUI();
+    // 话内位置记忆：回到上次看到的那一页（无记录则顶部）
+    const saved = loadPos();
+    if(saved && saved.comicId === (state.comic && state.comic.id) && saved.chapIdx === idx && saved.posInChap > 0 && saved.posInChap < imgs.length){
+      restorePos(saved.posInChap);
+    }else{
+      window.scrollTo(0,0);
+    }
+    saveHistory();
   }catch(e){
     area.innerHTML = '<div class="empty-state err">图片列表取数失败: '+esc(e.message)+'</div>';
   }
 }
 
-function prevChapter(){ if(state.chapIdx>0) openChapter(state.chapIdx-1); }
-function nextChapter(){ if(state.chapIdx < state.chapters.length-1) openChapter(state.chapIdx+1); }
+function prevChapter(){ if(state.viewChapIdx>0) openChapter(state.viewChapIdx-1); }
+function nextChapter(){ if(state.viewChapIdx < state.chapters.length-1) openChapter(state.viewChapIdx+1); }
+
+/** 平滑滚动到指定图片下标（话内位置跳转用） */
+function scrollToImg(i){
+  const fig = document.getElementById('fig-'+i);
+  if(!fig) return;
+  const top = fig.getBoundingClientRect().top + window.scrollY - 60;  // 60 = 顶栏高度余量
+  window.scrollTo({top: Math.max(0, top), behavior:'smooth'});
+}
+
+/** 记录/读取话内滚动位置（每本漫画一条，仅前端 localStorage）
+ *  存"话内偏移"而非全局下标：重新打开某一话时图片是从 0 开始的局部下标 */
+function savePos(){
+  if(!state.comic || state.view!=='reader') return;
+  const i = state.viewPos;
+  const r = chapterAt(i);
+  const posInChap = r ? (i - r.start) : i;
+  if(!(posInChap > 0)) return;   // 停在话首不用记
+  try{
+    localStorage.setItem('manga_pos', JSON.stringify({
+      comicId: state.comic.id, chapIdx: (r ? r.idx : state.viewChapIdx), posInChap: posInChap, time: Date.now()
+    }));
+  }catch(e){}
+}
+function loadPos(){
+  try{ return JSON.parse(localStorage.getItem('manga_pos')||'null'); }catch(e){ return null; }
+}
+function restorePos(i){
+  // 图片未加载时高度为 0，直接滚会偏；用 rAF 校正一次
+  requestAnimationFrame(()=>{ scrollToImg(i); requestAnimationFrame(()=>scrollToImg(i)); });
+}
 
 /** 懒加载：滑到哪张才通过代理取哪张（代理按备用 CDN 规则 + 解密）
  *  图片地址统一从 state.flatImgs 取，下标 = img.dataset.i（跨章节全局连续） */
@@ -536,8 +597,11 @@ async function preloadNextChapter(){
     newImgs.forEach(im => { if(observer) observer.observe(im); });
 
     state.loadedChaps[nextIdx] = true;
-    state.chapIdx = nextIdx;
-    document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
+    state.chapRanges.push({ idx: nextIdx, start: startIdx, end: startIdx + imgs.length - 1, title: ch.title, count: imgs.length });
+    state.chapIdx = nextIdx;   // 最后已加载话（驱动后续预加载）
+    // 顶栏 meta 只在用户真正读到这一话时才更新，否则会提前剧透
+    if(state.viewChapIdx >= nextIdx) document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
+    updateProgressUI();
   }catch(e){
     console.error('预加载下一章失败:', e);
   }
@@ -564,18 +628,91 @@ function imgOk(img){
 }
 function imgFail(img){
   const w = img.closest('.imgwrap');
-  if(w){ w.classList.remove('loading'); w.classList.add('failed');
-    w.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">图片加载失败</div>'; }
+  if(!w) return;
+  w.classList.remove('loading'); w.classList.add('failed');
+  const i = img.dataset.i;
+  w.innerHTML = '<div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">图片加载失败</div>' +
+    '<button class="imgretry" onclick="retryImg('+i+')">↻ 重试</button>';
+}
+/** 重试单张图：清掉 done 标记并重新走代理取图（代理端会再跑一遍 CDN 容灾链） */
+function retryImg(i){
+  const w = document.getElementById('fig-'+i);
+  if(!w) return;
+  const src = state.flatImgs[i] && state.flatImgs[i].url;
+  if(!src) return;
+  w.classList.remove('failed');
+  w.classList.add('loading');
+  w.innerHTML = '<img class="cimg" data-i="'+i+'" alt="第'+(i+1)+'页" onload="imgOk(this)" onerror="imgFail(this)">';
+  const im = w.querySelector('.cimg');
+  im.dataset.done = '1';
+  im.src = toProxyPath(src) + '&_r=' + Date.now();   // 加时间戳绕过浏览器/CDN 失败缓存
 }
 
-/* 阅读进度条 */
+/* ============================================================
+ * 阅读进度：显示"第 N 话" + 进度条（基于当前话，不随预加载倒退）
+ * ============================================================ */
+
+/** 全局图片下标 → 所在话区间 */
+function chapterAt(i){
+  for(let k=0;k<state.chapRanges.length;k++){
+    const r = state.chapRanges[k];
+    if(i >= r.start && i <= r.end) return r;
+  }
+  return state.chapRanges.length ? state.chapRanges[state.chapRanges.length-1] : null;
+}
+
+/** 计算当前视口所在的图片下标 */
+function computeViewPos(){
+  const figs = document.querySelectorAll('#readerArea .imgwrap');
+  if(!figs.length) return -1;
+  const probe = 90;   // 取视口顶部往下 90px 处作为"正在看"的判定线
+  for(let k=0;k<figs.length;k++){
+    const r = figs[k].getBoundingClientRect();
+    if(r.bottom > probe) return k;
+  }
+  return figs.length - 1;
+}
+
+/** 刷新进度条与"第 N 话"文本；同时同步 state.viewChapIdx / viewPos */
+function updateProgressUI(){
+  if(state.view!=='reader') return;
+  const area = document.getElementById('readerArea');
+  // 视图被隐藏时所有 rect 归零，会把"当前话"误判成最后一话；隐藏时直接跳过
+  if(!area || area.offsetParent === null) return;
+  const i = computeViewPos();
+  if(i < 0) return;
+  state.viewPos = i;
+  const r = chapterAt(i);
+  if(r) state.viewChapIdx = r.idx;
+
+  const bar = document.getElementById('progressBar');
+  const txt = document.getElementById('progressTxt');
+  if(r && r.count > 0){
+    const within = Math.min(1, Math.max(0, (i - r.start + 1) / r.count));
+    if(bar) bar.style.width = Math.round(within * 100) + '%';
+    if(txt) txt.textContent = '第 ' + (r.idx+1) + ' 话 · ' + (i - r.start + 1) + '/' + r.count + '页';
+  }else{
+    // 章节区间未知（理论兜底）：退回整页百分比
+    const h = document.documentElement.scrollHeight - window.innerHeight;
+    const p = h > 0 ? Math.min(100, Math.round(window.scrollY / h * 100)) : 0;
+    if(bar) bar.style.width = p + '%';
+    if(txt) txt.textContent = p + '%';
+  }
+}
+
+let _scrollTick = false;
 window.addEventListener('scroll', ()=>{
   if(state.view!=='reader') return;
-  const h = document.documentElement.scrollHeight - window.innerHeight;
-  const p = h > 0 ? Math.min(100, Math.round(window.scrollY / h * 100)) : 0;
-  const bar = document.getElementById('progressBar');
-  if(bar) bar.style.width = p + '%';
+  if(_scrollTick) return;
+  _scrollTick = true;
+  requestAnimationFrame(()=>{
+    _scrollTick = false;
+    updateProgressUI();
+    savePos();
+  });
 }, {passive:true});
+
+window.addEventListener('resize', ()=>{ if(state.view==='reader') updateProgressUI(); }, {passive:true});
 
 /* ============================================================
  * 十、书源规则面板（让"规则驱动"可见）
@@ -606,7 +743,10 @@ function saveHistory(){
   const h = JSON.parse(localStorage.getItem('manga_history')||'[]');
   const idx = h.findIndex(x=>x.comicId===state.comic.id);
   if(idx>=0) h.splice(idx,1);
-  h.unshift({comicId:state.comic.id, title:state.comic.title, cover:state.comic.cover, chapIdx:state.chapIdx, time:Date.now()});
+  // 记"用户看到的话"（viewChapIdx），不是"最后预加载的话"（chapIdx），否则连续阅读下会记成最新一话
+  const r = chapterAt(state.viewPos);
+  const posInChap = r ? (state.viewPos - r.start) : state.viewPos;
+  h.unshift({comicId:state.comic.id, title:state.comic.title, cover:state.comic.cover, chapIdx:state.viewChapIdx, posInChap:posInChap, time:Date.now()});
   localStorage.setItem('manga_history', JSON.stringify(h.slice(0,20)));
 }
 function renderHistory(){
@@ -629,9 +769,40 @@ function goTop(){ window.scrollTo({top:0,behavior:'smooth'}); }
 
 document.addEventListener('keydown', e=>{
   if(state.view!=='reader') return;
-  if(e.key==='ArrowRight') nextChapter();
-  if(e.key==='ArrowLeft') prevChapter();
-  if(e.key==='ArrowUp') goTop();
+  // 输入框聚焦时不劫持按键
+  const tag = (e.target && e.target.tagName) || '';
+  if(tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+
+  switch(e.key){
+    case 'ArrowRight': nextChapter(); break;
+    case 'ArrowLeft':  prevChapter(); break;
+    case 'k': case 'K': prevChapter(); break;
+    case 'j': case 'J': nextChapter(); break;
+    case ' ': case 'Spacebar':        // 空格：翻一屏
+      e.preventDefault();
+      window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
+      break;
+    case 'PageDown':
+      e.preventDefault();
+      window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
+      break;
+    case 'PageUp':
+      e.preventDefault();
+      window.scrollBy({top: -window.innerHeight * 0.9, behavior:'smooth'});
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      window.scrollBy({top: 120, behavior:'smooth'});
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      window.scrollBy({top: -120, behavior:'smooth'});
+      break;
+    case 'Home':
+      e.preventDefault(); goTop(); break;
+    case 'End':
+      e.preventDefault(); window.scrollTo({top: document.documentElement.scrollHeight, behavior:'smooth'}); break;
+  }
 });
 
 /* ============================================================
