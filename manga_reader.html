@@ -32,11 +32,13 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:200;flex-wrap:wrap;transition:transform .25s ease,opacity .25s ease}
 /* 自动隐藏：鼠标移近顶部才显示（.hidden 由 JS 切换） */
 .reader-top.hidden{transform:translateY(-100%);opacity:0;pointer-events:none}
-.reader-top .rt-title{font-size:14px;color:var(--accent);cursor:pointer;font-weight:700}
-.reader-top .meta{font-size:13px;color:var(--mut);flex:1}
-.progress{flex:1;min-width:100px;height:4px;background:var(--ln);border-radius:2px;overflow:hidden}
+.reader-top .rt-title{font-size:14px;color:var(--accent);cursor:pointer;font-weight:700;white-space:nowrap}
+.reader-top .meta{font-size:13px;color:var(--mut);flex:1 1 100px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.progress{flex:1 1 80px;min-width:50px;height:4px;background:var(--ln);border-radius:2px;overflow:hidden}
 #progressBar{height:100%;background:var(--accent);width:0%;transition:width .3s;display:block}
-.controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;margin-left:6px}
+/* 控件区：整体不换行、按钮紧凑，保证桌面宽度下顶栏保持单行 */
+.controls{display:flex;flex-wrap:nowrap;flex:0 0 auto;align-items:center;gap:4px}
+.controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;flex:0 0 auto}
 #readerArea{padding:20px;max-width:800px;margin:0 auto}
 .imgwrap{position:relative;width:100%;margin-bottom:8px;background:#111;border-radius:4px;overflow:hidden;min-height:120px}
 .imgwrap img{width:100%;display:block;background:#111;object-fit:contain}
@@ -839,28 +841,43 @@ function showTopbar(){
   if(!rt) return;
   rt.classList.remove('hidden');
 }
+/** 设置/规则面板是否有打开的 */
+function anyReaderPanelOpen(){
+  const tools = document.getElementById('readerTools');
+  const rules = document.getElementById('rulesPanel');
+  return !!((tools && tools.classList.contains('on')) || (rules && rules.classList.contains('on')));
+}
+
 function hideTopbar(){
   const rt = document.querySelector('.reader-top');
   if(!rt) return;
   // 鼠标还停在顶栏上（可能在操作按钮）就不隐藏
   if(rt.matches(':hover')) return;
-  // 展开的设置/规则面板贴着顶栏，隐藏顶栏会让它们悬空，一并收起
-  const tools = document.getElementById('readerTools');
-  if(tools) tools.classList.remove('on');
-  const rules = document.getElementById('rulesPanel');
-  if(rules) rules.classList.remove('on');
+  // 面板打开时既不隐藏顶栏、也不收起面板：
+  // 面板位于顶栏下方，鼠标必然离开顶部区域去操作它，
+  // 若无条件隐藏会把面板一起吃掉（表现为"点设置没反应"）
+  if(anyReaderPanelOpen()) return;
   rt.classList.add('hidden');
 }
 /** 鼠标离开后延时隐藏；移回顶部会取消 */
 function scheduleTopbarHide(){
   clearTimeout(READER_TOPBAR.timer);
-  READER_TOPBAR.timer = setTimeout(()=>{ if(state.view === 'reader') hideTopbar(); }, READER_TOPBAR.HIDE_DELAY);
+  READER_TOPBAR.timer = setTimeout(()=>{
+    if(state.view !== 'reader') return;
+    if(anyReaderPanelOpen()) return;   // 面板开着就别隐藏，等用户关掉面板再说
+    hideTopbar();
+  }, READER_TOPBAR.HIDE_DELAY);
+}
+
+/** 取消待执行的隐藏（并把 timer 置空，便于状态判断） */
+function cancelTopbarHide(){
+  if(READER_TOPBAR.timer){ clearTimeout(READER_TOPBAR.timer); READER_TOPBAR.timer = null; }
 }
 
 function onReaderMouseMove(e){
   if(state.view !== 'reader') return;
   if(e.clientY <= READER_TOPBAR.REVEAL_ZONE){
-    clearTimeout(READER_TOPBAR.timer);
+    cancelTopbarHide();
     showTopbar();
   }else if(isTopbarShown()){
     scheduleTopbarHide();
@@ -887,9 +904,13 @@ function enterReaderTopbar(){
   showTopbar();
   scheduleTopbarHide();
 }
-/** 离开阅读器时复位（恢复显示并解绑状态，便于下次进入重新计时） */
+/** 离开阅读器时复位（恢复显示、关掉面板，便于下次进入重新计时） */
 function leaveReaderTopbar(){
   clearTimeout(READER_TOPBAR.timer);
+  const tools = document.getElementById('readerTools');
+  if(tools) tools.classList.remove('on');
+  const rules = document.getElementById('rulesPanel');
+  if(rules) rules.classList.remove('on');
   showTopbar();
 }
 
@@ -1065,7 +1086,11 @@ function saveReaderPrefs(){
 
 function toggleReaderTools(){
   const p = document.getElementById('readerTools');
-  if(p) p.classList.toggle('on');
+  if(!p) return;
+  p.classList.toggle('on');
+  // 面板开着时取消待执行的隐藏（面板在顶栏下方，鼠标要移出去操作它）
+  if(p.classList.contains('on')){ cancelTopbarHide(); showTopbar(); }
+  else scheduleTopbarHide();
 }
 
 /** 图片宽度：预设模式 fit（适应宽度，800px 上限）/ orig（原始尺寸） */
@@ -1156,7 +1181,10 @@ function jumpToChapter(i){
  * ============================================================ */
 function toggleRules(){
   const p = document.getElementById('rulesPanel');
+  if(!p) return;
   p.classList.toggle('on');
+  if(p.classList.contains('on')){ cancelTopbarHide(); showTopbar(); }
+  else scheduleTopbarHide();
 }
 function renderRulesPanel(){
   const rows = Object.keys(BOOK_SOURCES.rules).map(k=>{
