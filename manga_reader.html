@@ -67,6 +67,38 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 .progress-txt{font-size:11px;color:var(--mut);white-space:nowrap;min-width:64px;text-align:right}
 .imgretry{display:block;margin:12px auto;padding:6px 14px;background:transparent;border:1px solid var(--ln);color:var(--mut);border-radius:4px;cursor:pointer;font-size:12px}
 .imgretry:hover{border-color:var(--accent);color:var(--accent)}
+/* ---- 阅读器显示设置（宽度/亮度） ---- */
+#readerTools{background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:12px 14px;margin-bottom:10px;font-size:12px;display:none}
+#readerTools.on{display:block}
+#readerTools .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+#readerTools .row:last-child{margin-bottom:0}
+#readerTools label{color:var(--mut);min-width:56px}
+#readerTools button{padding:4px 12px;border:1px solid var(--ln);background:transparent;color:var(--mut);border-radius:4px;cursor:pointer;font-size:12px}
+#readerTools button.active,#readerTools button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+#readerTools input[type=range]{width:150px;accent-color:var(--accent)}
+#readerTools .val{color:var(--mut);min-width:38px;text-align:right}
+/* 宽度模式：w-fit 适应宽度 / w-full 铺满全宽 / w-orig 原始尺寸 */
+#readerArea.w-full{max-width:100%;padding:0}
+#readerArea.w-full .imgwrap{border-radius:0}
+#readerArea.w-orig{max-width:100%;padding:0;overflow-x:auto}
+#readerArea.w-orig .imgwrap{width:fit-content;max-width:none;margin:0 auto 4px}
+#readerArea.w-orig .imgwrap img{width:auto;max-width:none}
+/* 亮度：作用于整个阅读区 */
+#readerArea{filter:brightness(var(--reader-brightness,1))}
+/* ---- 章节快速跳转浮层 ---- */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;display:none}
+.overlay.on{display:block}
+.overlay .panel{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,92vw);max-height:80vh;background:var(--card);border:1px solid var(--ln);border-radius:10px;display:flex;flex-direction:column;overflow:hidden}
+.overlay .panel h3{padding:14px 16px;font-size:14px;color:var(--accent);border-bottom:1px solid var(--ln);display:flex;justify-content:space-between;align-items:center;gap:10px}
+.overlay .panel .close{cursor:pointer;color:var(--mut);font-size:20px;line-height:1;background:none;border:none;padding:0 4px}
+.overlay .panel .close:hover{color:var(--accent)}
+.overlay .list{overflow-y:auto;padding:4px 0}
+.jump-item{padding:10px 16px;border-bottom:1px solid var(--ln);cursor:pointer;display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.jump-item:hover{background:var(--bg);color:var(--accent)}
+.jump-item.cur{background:var(--accent);color:#fff}
+.jump-item.cur .sub{color:rgba(255,255,255,.85)}
+.jump-item .sub{color:var(--mut);font-size:11px;white-space:nowrap}
+.jump-item .jump-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style></head><body>
 
 <header>
@@ -131,16 +163,40 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
       <span class="progress-txt" id="progressTxt">第 1 话</span>
       <div class="progress"><i id="progressBar"></i></div>
       <div class="controls">
-        <button onclick="toggleChapters()">📖 章节</button>
+        <button onclick="openJumpPanel()">📖 章节</button>
         <button onclick="prevChapter()">上一话</button>
         <button onclick="nextChapter()">下一话</button>
+        <button onclick="toggleReaderTools()">🎨 设置</button>
         <button onclick="toggleRules()">🔧 书源规则</button>
         <button onclick="toggleContinuous()" id="btnContinuous">📜 连续阅读</button>
+      </div>
+    </div>
+    <div id="readerTools">
+      <div class="row">
+        <label>图片宽度</label>
+        <button id="wbtn-fit"  onclick="setImgWidth('fit')">适应宽度</button>
+        <button id="wbtn-full" onclick="setImgWidth('full')">铺满全宽</button>
+        <button id="wbtn-orig" onclick="setImgWidth('orig')">原始尺寸</button>
+      </div>
+      <div class="row">
+        <label>亮度</label>
+        <input type="range" id="brightRange" min="30" max="130" step="5" value="100" oninput="setBrightness(this.value)">
+        <span class="val" id="brightVal">100%</span>
+        <button onclick="setBrightness(100)">重置</button>
       </div>
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
     <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格/PageDown 翻屏 | ↑↓/Home/End 顶部底部 | J/K 上下话</div>
+  </div>
+</div>
+
+<!-- 章节快速跳转浮层 -->
+<div class="overlay" id="jumpOverlay">
+  <div class="panel">
+    <h3><span>📖 跳转章节 <span id="jumpCount" style="color:var(--mut);font-size:12px;font-weight:400"></span></span>
+      <button class="close" onclick="closeJumpPanel()">✕</button></h3>
+    <div class="list" id="jumpList"></div>
   </div>
 </div>
 
@@ -241,7 +297,9 @@ const state = {
   flatImgs:[],       // 全局图片列表，下标 = 图片 data-i（跨章节连续）
   chapRanges:[],     // 话 → 图片下标区间 [{idx,start,end,title,count}]
   viewChapIdx:0,     // 视口当前所在话（显示/历史用；chapIdx 仍是"最后已加载话"）
-  viewPos:0          // 视口当前图片下标（话内位置记忆）
+  viewPos:0,         // 视口当前图片下标（话内位置记忆）
+  imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / full 铺满全宽 / orig 原始尺寸
+  brightness:100     // 阅读区亮度百分比（30–130）
 };
 
 /* ============================================================
@@ -450,6 +508,7 @@ async function openChapter(idx){
        </figure>`).join('');
     ensureSentinel();
     setupLazy();
+    applyImgWidth();   // 宽度模式（fit/full/orig）在重新渲染后需要重新落到 class 上
     if(state.continuous){
       state.loadedChaps = {};
       state.loadedChaps[idx] = true;
@@ -723,7 +782,94 @@ window.addEventListener('scroll', ()=>{
 window.addEventListener('resize', ()=>{ if(state.view==='reader') updateProgressUI(); }, {passive:true});
 
 /* ============================================================
- * 十、书源规则面板（让"规则驱动"可见）
+ * 十、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
+ * 纯前端：设置存 localStorage，不涉及代理层
+ * ============================================================ */
+
+/** 读取并应用显示设置（boot 时调用一次） */
+function loadReaderPrefs(){
+  try{
+    const p = JSON.parse(localStorage.getItem('manga_prefs')||'{}');
+    if(p.imgWidth) state.imgWidth = p.imgWidth;
+    if(typeof p.brightness === 'number') state.brightness = p.brightness;
+  }catch(e){}
+  applyImgWidth();
+  applyBrightness();
+}
+function saveReaderPrefs(){
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, brightness:state.brightness})); }catch(e){}
+}
+
+function toggleReaderTools(){
+  const p = document.getElementById('readerTools');
+  if(p) p.classList.toggle('on');
+}
+
+/** 图片宽度模式：fit / full / orig */
+function setImgWidth(mode){
+  state.imgWidth = (mode==='full'||mode==='orig') ? mode : 'fit';
+  applyImgWidth();
+  saveReaderPrefs();
+}
+function applyImgWidth(){
+  const area = document.getElementById('readerArea');
+  if(!area) return;
+  area.classList.remove('w-full','w-orig');
+  if(state.imgWidth === 'full') area.classList.add('w-full');
+  if(state.imgWidth === 'orig') area.classList.add('w-orig');
+  // 同步按钮高亮
+  ['fit','full','orig'].forEach(m=>{
+    const b = document.getElementById('wbtn-'+m);
+    if(b) b.classList.toggle('active', state.imgWidth === m);
+  });
+}
+
+/** 亮度：作用于 #readerArea 的 CSS filter */
+function setBrightness(v){
+  let n = parseInt(v,10);
+  if(isNaN(n)) n = 100;
+  n = Math.min(130, Math.max(30, n));
+  state.brightness = n;
+  applyBrightness();
+  saveReaderPrefs();
+}
+function applyBrightness(){
+  const area = document.getElementById('readerArea');
+  if(area) area.style.setProperty('--reader-brightness', String(state.brightness/100));
+  const r = document.getElementById('brightRange');
+  if(r) r.value = state.brightness;
+  const v = document.getElementById('brightVal');
+  if(v) v.textContent = state.brightness + '%';
+}
+
+/* ---------- 章节快速跳转浮层 ---------- */
+function openJumpPanel(){
+  if(!state.chapters.length) return;
+  const cur = state.viewChapIdx;
+  document.getElementById('jumpCount').textContent = '共 ' + state.chapters.length + ' 话';
+  document.getElementById('jumpList').innerHTML = state.chapters.map((ch,i)=>
+    `<div class="jump-item${i===cur?' cur':''}" data-idx="${i}" onclick="jumpToChapter(${i})">
+       <span class="jump-t">${esc(ch.title||('第'+ch.sortId+'话'))}</span>
+       <span class="sub">${ch.picCount||'?'}图${ch.isVip?' · VIP':''}</span>
+     </div>`).join('');
+  const ov = document.getElementById('jumpOverlay');
+  ov.classList.add('on');
+  // 让当前话滚入可视区
+  const el = document.querySelector('.jump-item.cur');
+  if(el && el.scrollIntoView) el.scrollIntoView({block:'center'});
+}
+function closeJumpPanel(){
+  const ov = document.getElementById('jumpOverlay');
+  if(ov) ov.classList.remove('on');
+}
+function jumpToChapter(i){
+  closeJumpPanel();
+  if(i === state.viewChapIdx) return;   // 已是当前话
+  openChapter(i);
+}
+
+/* ============================================================
+ * 十一、书源规则面板（让"规则驱动"可见）
  * ============================================================ */
 function toggleRules(){
   const p = document.getElementById('rulesPanel');
@@ -744,7 +890,7 @@ function renderRulesPanel(){
 }
 
 /* ============================================================
- * 十一、本地阅读进度
+ * 十二、本地阅读进度
  * ============================================================ */
 function saveHistory(){
   if(!state.comic) return;
@@ -768,14 +914,19 @@ function renderHistory(){
 }
 
 /* ============================================================
- * 十二、工具
+ * 十三、工具
  * ============================================================ */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ n = Number(n)||0; return n >= 10000 ? (n/10000).toFixed(1)+'万' : String(n); }
-function toggleChapters(){ if(state.chapters.length) navigate('detail'); }
 function goTop(){ window.scrollTo({top:0,behavior:'smooth'}); }
 
 document.addEventListener('keydown', e=>{
+  // 跳转浮层：Esc 关闭（优先于阅读器快捷键，浮层打开时拦截其他按键）
+  const ov = document.getElementById('jumpOverlay');
+  if(ov && ov.classList.contains('on')){
+    if(e.key === 'Escape'){ closeJumpPanel(); e.preventDefault(); }
+    return;
+  }
   if(state.view!=='reader') return;
   // 输入框聚焦时不劫持按键
   const tag = (e.target && e.target.tagName) || '';
@@ -817,6 +968,7 @@ document.addEventListener('keydown', e=>{
  * 十三、启动：先拉书源规则，再按规则取首页数据
  * ============================================================ */
 (async function boot(){
+  loadReaderPrefs();     // 先应用显示设置（宽度/亮度），再渲染
   await loadRules();
   navigate('home');
 })();
