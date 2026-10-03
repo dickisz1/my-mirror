@@ -38,7 +38,20 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 #progressBar{height:100%;background:var(--accent);width:0%;transition:width .3s;display:block}
 /* 控件区：整体不换行、按钮紧凑，保证桌面宽度下顶栏保持单行 */
 .controls{display:flex;flex-wrap:nowrap;flex:0 0 auto;align-items:center;gap:4px}
-.controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;flex:0 0 auto}
+.controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;flex:0 0 auto;line-height:1.2}
+.controls button .ic{margin-right:3px}
+.controls button.icon-only .ic{margin-right:0}
+/* 窄屏渐进降级：逐步隐藏次要标签，保证 7 个按钮始终单行不溢出 */
+@media (max-width:1100px){ .progress-txt{display:none} }
+@media (max-width:1000px){
+  .controls button .lb{display:none}          /* 全部按钮收成纯图标 */
+  .controls button{padding:4px 7px}
+  .controls button .ic{margin-right:0}
+}
+@media (max-width:620px){
+  #btnAutoScroll{display:none}                /* 窄屏隐藏自动滚动（可在设置面板调） */
+  .reader-top .meta{flex-basis:60px}
+}
 #readerArea{padding:20px;max-width:800px;margin:0 auto}
 .imgwrap{position:relative;width:100%;margin-bottom:8px;background:#111;border-radius:4px;overflow:hidden;min-height:120px}
 .imgwrap img{width:100%;display:block;background:#111;object-fit:contain}
@@ -175,13 +188,13 @@ body.reader-wide .container{max-width:none;padding:0}
       <span class="progress-txt" id="progressTxt">第 1 话</span>
       <div class="progress"><i id="progressBar"></i></div>
       <div class="controls">
-        <button onclick="openJumpPanel()">📖 章节</button>
-        <button onclick="prevChapter()">上一话</button>
-        <button onclick="nextChapter()">下一话</button>
-        <button onclick="toggleReaderTools()">🎨 设置</button>
-        <button onclick="toggleAutoScroll()" id="btnAutoScroll">▶ 自动滚动</button>
-        <button onclick="toggleRules()">🔧 书源规则</button>
-        <button onclick="toggleContinuous()" id="btnContinuous">📜 连续阅读</button>
+        <button onclick="openJumpPanel()"><span class="ic">📖</span><span class="lb">章节</span></button>
+        <button onclick="prevChapter()"><span class="ic">⏮</span><span class="lb">上一话</span></button>
+        <button onclick="nextChapter()"><span class="ic">⏭</span><span class="lb">下一话</span></button>
+        <button onclick="toggleReaderTools()"><span class="ic">🎨</span><span class="lb">设置</span></button>
+        <button onclick="toggleAutoScroll()" id="btnAutoScroll"><span class="ic">▶</span><span class="lb">自动滚动</span></button>
+        <button onclick="toggleRules()"><span class="ic">🔧</span><span class="lb">书源规则</span></button>
+        <button onclick="toggleContinuous()" id="btnContinuous"><span class="ic">📜</span><span class="lb">连续阅读</span></button>
       </div>
     </div>
     <div id="readerTools">
@@ -948,13 +961,18 @@ function applyAutoSpeedUI(){
 function updateAutoScrollBtn(){
   const b = document.getElementById('btnAutoScroll');
   if(!b) return;
+  // 按钮内含 .ic / .lb 两个 span，不能直接改 textContent（会破坏结构）
+  const ic = b.querySelector('.ic');
+  const lb = b.querySelector('.lb');
   if(AUTOSCROLL.running){
-    b.textContent = '⏸ 停止';
+    if(ic) ic.textContent = '⏸';
+    if(lb) lb.textContent = '停止';
     b.style.background = 'var(--accent)';
     b.style.color = '#fff';
     b.style.borderColor = 'var(--accent)';
   }else{
-    b.textContent = '▶ 自动滚动';
+    if(ic) ic.textContent = '▶';
+    if(lb) lb.textContent = '自动滚动';
     b.style.background = 'transparent';
     b.style.color = 'var(--mut)';
     b.style.borderColor = 'var(--ln)';
