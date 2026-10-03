@@ -587,11 +587,18 @@ function stickyOffset(){
 function topbarWrapped(){
   const rt = document.querySelector('.reader-top');
   if(!rt) return false;
-  const btns = Array.from(rt.querySelectorAll('.controls button')).filter(b => b.offsetParent !== null);
-  if(btns.length < 2) return false;
-  const tops = new Set(btns.map(b => Math.round(b.getBoundingClientRect().top)));
-  if(tops.size > 1) return true;                       // 按钮自身换行
-  // 顶栏整体是否被撑到多行：控件区右边界超过顶栏右边界即视为溢出
+  // 主判据：顶栏的直接子元素（标题/meta/进度文字/进度条/控件区）是否落在不同行。
+  // 用垂直中心线之差判断——flex-wrap 换行后，该元素中心会整体下移一个行高。
+  const kids = Array.from(rt.children);
+  if(kids.length >= 2){
+    const centers = kids.map(el => {
+      const r = el.getBoundingClientRect();
+      return r.top + r.height / 2;
+    });
+    const span = Math.max.apply(null, centers) - Math.min.apply(null, centers);
+    if(span > 6) return true;
+  }
+  // 兜底：控件区右边界超出顶栏右边界（nowrap 溢出）
   const ctr = rt.querySelector('.controls');
   if(ctr && Math.round(ctr.getBoundingClientRect().right) > Math.round(rt.getBoundingClientRect().right) + 1) return true;
   return false;
