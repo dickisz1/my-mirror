@@ -227,6 +227,39 @@ mouseleave / window blur → 立即隐藏（不等 2 秒）
 
 > 注意：`.reader-top` 的 `z-index` 必须高于站点 `header`（100），否则滚动吸顶后顶栏被 header 盖住，表现为"往下翻就不见了"——这是曾经的 bug。
 
+### 自动滚动的数据流
+
+```
+用户点「▶ 自动滚动」(toggleAutoScroll) 或速度滑杆 (setAutoSpeed)
+   │
+   ├── setAutoSpeed(v)：钳制 10–300 → state.autoSpeed → saveReaderPrefs()
+   │
+   └── startAutoScroll()
+         ├── 若已在最底部且无话可加载 → 提示「已是最后一话」并返回
+         ├── AUTOSCROLL.running = true；last=0；stuckSince=0
+         ├── updateAutoScrollBtn()：按钮变「⏸ 停止」
+         ├── scheduleTopbarHide()：顶栏让位
+         └── requestAnimationFrame(autoScrollTick)
+   │
+   ▼
+autoScrollTick(ts) 每帧：
+   ├── 首帧只建立 last 基准（dt=0，不移动）
+   ├── dt = ts - last，按 MAX_FRAME_MS(100ms) 限幅
+   ├── window.scrollTo(0, scrollY + autoSpeed * dt / 1000)
+   ├── 未能移动且已到底：
+   │     ├── 连续阅读开着 → preloadNextChapter()，等新内容撑开
+   │     └── 卡住超过 STUCK_MS(4000ms) → stopAutoScroll() + 提示
+   └── requestAnimationFrame(autoScrollTick) 继续
+   │
+   ▼
+中断（立即 stopAutoScroll）：
+   ├── wheel / touchstart（用户主动滚动）
+   ├── 键盘（INPUT/TEXTAREA 聚焦时除外，保证滚动中可调速度）
+   └── navigate() 离开阅读器
+
+> 自动滚动自身走 window.scrollTo，不触发 wheel/touch，因此不会自我中断。
+```
+
 ## 各逻辑层职责
 
 ### 1. 前端 UI 层 (`manga_reader.html`)
@@ -330,6 +363,8 @@ mouseleave / window blur → 立即隐藏（不等 2 秒）
 11. **localStorage 键**：`manga_history`（历史）、`manga_pos`（话内位置）、`manga_prefs`（显示设置）三者独立，改名会导致用户数据丢失
 12. **顶栏层级**：`.reader-top` 的 `z-index` 必须 > 站点 `header` 的 100，否则滚动吸顶后顶栏被 header 盖住（表现为"往下翻就不见了"）
 13. **顶栏自动隐藏参数**：`READER_TOPBAR.REVEAL_ZONE`(80px) 与 `HIDE_DELAY`(2000ms)；隐藏态是 `.reader-top.hidden`，改动时须同步 `stickyOffset()` 的留白计算
+14. **自动滚动的时间基准**：`dt` 必须按 `AUTOSCROLL.MAX_FRAME_MS`(100ms) 限幅，且首帧只建立基准不移动；判断"最后一话"用 `chapIdx` 而非 `viewChapIdx`
+15. **自动滚动速度**：`state.autoSpeed`（10–300 px/s）存 `manga_prefs.autoSpeed`；键盘中断检查必须在 `INPUT`/`TEXTAREA` 判断之后，否则调速度会停掉滚动
 
 ## 风险清单
 

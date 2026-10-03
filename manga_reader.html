@@ -106,6 +106,9 @@ body.reader-wide .container{max-width:none;padding:0}
 .jump-item.cur .sub{color:rgba(255,255,255,.85)}
 .jump-item .sub{color:var(--mut);font-size:11px;white-space:nowrap}
 .jump-item .jump-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 阅读器轻提示 */
+.reader-toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,12px);background:rgba(0,0,0,.82);color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:300;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+.reader-toast.on{opacity:1;transform:translate(-50%,0)}
 </style></head><body>
 
 <header>
@@ -174,6 +177,7 @@ body.reader-wide .container{max-width:none;padding:0}
         <button onclick="prevChapter()">上一话</button>
         <button onclick="nextChapter()">下一话</button>
         <button onclick="toggleReaderTools()">🎨 设置</button>
+        <button onclick="toggleAutoScroll()" id="btnAutoScroll">▶ 自动滚动</button>
         <button onclick="toggleRules()">🔧 书源规则</button>
         <button onclick="toggleContinuous()" id="btnContinuous">📜 连续阅读</button>
       </div>
@@ -195,6 +199,12 @@ body.reader-wide .container{max-width:none;padding:0}
         <input type="range" id="brightRange" min="30" max="130" step="5" value="100" oninput="setBrightness(this.value)">
         <span class="val" id="brightVal">100%</span>
         <button onclick="setBrightness(100)">重置</button>
+      </div>
+      <div class="row">
+        <label>滚动速度</label>
+        <input type="range" id="speedRange" min="10" max="300" step="10" value="60" oninput="setAutoSpeed(this.value)">
+        <span class="val" id="speedVal">60</span>
+        <span style="color:var(--mut);font-size:11px">像素/秒 · 滚轮或按键会自动停止</span>
       </div>
     </div>
     <div id="rulesPanel"></div>
@@ -312,7 +322,8 @@ const state = {
   viewPos:0,         // 视口当前图片下标（话内位置记忆）
   imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / orig 原始尺寸 / custom 自定义百分比
   widthPct:100,      // 自定义宽度：阅读区宽度占视口的百分比（30–100）
-  brightness:100     // 阅读区亮度百分比（30–130）
+  brightness:100,    // 阅读区亮度百分比（30–130）
+  autoSpeed:60       // 自动滚动速度（像素/秒，10–300）
 };
 
 /* ============================================================
@@ -361,7 +372,7 @@ function navigate(view){
   if(view==='search') renderSearch();
   // 阅读器顶栏自动隐藏：进入时启用，离开时复位
   if(view === 'reader') enterReaderTopbar();
-  else if(prev === 'reader') leaveReaderTopbar();
+  else if(prev === 'reader'){ leaveReaderTopbar(); stopAutoScroll(); }
 }
 
 /* ============================================================
@@ -883,7 +894,153 @@ function leaveReaderTopbar(){
 }
 
 /* ============================================================
- * 十一、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
+ * 十一、自动滚动（看漫画不手动翻，速度可调）
+ * 纯前端：requestAnimationFrame 平滑推进，不涉及代理层
+ * ============================================================ */
+const AUTOSCROLL = {
+  running: false,
+  raf: null,
+  last: 0,            // 上一帧时间戳
+  stuckSince: 0,      // 卡在底部开始的时间（用于判定预加载失败）
+  MAX_FRAME_MS: 100,  // 单帧最大时间差：标签页切回来时防猛跳
+  STUCK_MS: 4000      // 到底后超过这么久页面还没长高 → 判定加载失败并停止
+};
+
+function isAutoScrolling(){ return AUTOSCROLL.running; }
+
+/** 速度滑杆：10–300 像素/秒 */
+function setAutoSpeed(v){
+  let n = parseInt(v,10);
+  if(isNaN(n)) n = 60;
+  n = Math.min(300, Math.max(10, n));
+  state.autoSpeed = n;
+  applyAutoSpeedUI();
+  saveReaderPrefs();
+}
+function applyAutoSpeedUI(){
+  const r = document.getElementById('speedRange');
+  if(r) r.value = state.autoSpeed;
+  const v = document.getElementById('speedVal');
+  if(v) v.textContent = String(state.autoSpeed);
+}
+
+function updateAutoScrollBtn(){
+  const b = document.getElementById('btnAutoScroll');
+  if(!b) return;
+  if(AUTOSCROLL.running){
+    b.textContent = '⏸ 停止';
+    b.style.background = 'var(--accent)';
+    b.style.color = '#fff';
+    b.style.borderColor = 'var(--accent)';
+  }else{
+    b.textContent = '▶ 自动滚动';
+    b.style.background = 'transparent';
+    b.style.color = 'var(--mut)';
+    b.style.borderColor = 'var(--ln)';
+  }
+}
+
+function toggleAutoScroll(){
+  if(AUTOSCROLL.running) stopAutoScroll();
+  else startAutoScroll();
+}
+
+function startAutoScroll(){
+  if(AUTOSCROLL.running) return;
+  if(state.view !== 'reader') return;
+  // 已经在最底部：先看能否预加载下一话，否则直接提示
+  if(atBottom() && !canGrow()){
+    if(state.chapters.length && state.viewChapIdx >= state.chapters.length - 1){
+      showReaderToast('已是最后一话');
+      return;
+    }
+  }
+  AUTOSCROLL.running = true;
+  AUTOSCROLL.last = 0;
+  AUTOSCROLL.stuckSince = 0;
+  updateAutoScrollBtn();
+  // 自动滚动时顶栏让位，避免挡住画面
+  scheduleTopbarHide();
+  AUTOSCROLL.raf = requestAnimationFrame(autoScrollTick);
+}
+
+function stopAutoScroll(){
+  if(!AUTOSCROLL.running) return;
+  AUTOSCROLL.running = false;
+  if(AUTOSCROLL.raf){ cancelAnimationFrame(AUTOSCROLL.raf); AUTOSCROLL.raf = null; }
+  updateAutoScrollBtn();
+}
+
+/** 一帧：按 速度 × 时间差 推进滚动；到底则尝试加载下一话 */
+function autoScrollTick(ts){
+  if(!AUTOSCROLL.running) return;
+  if(state.view !== 'reader'){ stopAutoScroll(); return; }
+
+  if(!AUTOSCROLL.last) AUTOSCROLL.last = ts;
+  let dt = ts - AUTOSCROLL.last;
+  AUTOSCROLL.last = ts;
+  // 标签页被切走再回来，dt 会很大 → 限幅，防止画面猛跳
+  if(dt > AUTOSCROLL.MAX_FRAME_MS) dt = AUTOSCROLL.MAX_FRAME_MS;
+
+  const before = window.scrollY;
+  window.scrollTo(0, before + state.autoSpeed * dt / 1000);
+  const moved = window.scrollY > before;
+
+  if(!moved && atBottom()){
+    // 到底了：连续阅读模式下尝试加载下一话
+    if(state.continuous && !state.loadingNext) preloadNextChapter();
+    if(canGrow()){
+      AUTOSCROLL.stuckSince = 0;   // 页面还能长高，等新内容撑开
+    }else{
+      if(!AUTOSCROLL.stuckSince) AUTOSCROLL.stuckSince = ts;
+      if(ts - AUTOSCROLL.stuckSince > AUTOSCROLL.STUCK_MS){
+        // 判断依据是"还有没有话可加载"（chapIdx = 最后已加载话），
+        // 不能用 viewChapIdx（用户视口所在话），否则预加载失败时会误报"加载失败"
+        const last = state.chapIdx >= state.chapters.length - 1;
+        stopAutoScroll();
+        showReaderToast(last ? '已是最后一话' : '后续内容加载失败，已停止');
+        return;
+      }
+    }
+  }else{
+    AUTOSCROLL.stuckSince = 0;
+  }
+
+  AUTOSCROLL.raf = requestAnimationFrame(autoScrollTick);
+}
+
+/** 是否已滚到底（留 2px 容差） */
+function atBottom(){
+  return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+}
+/** 是否还有可能长高（还有未加载的下一话，且连续阅读开着） */
+function canGrow(){
+  return state.continuous && !state.loadingNext && state.chapIdx < state.chapters.length - 1;
+}
+
+/** 用户主动操作（滚轮/触摸/按键）→ 立即停止自动滚动，避免抢控制权 */
+function userInterruptAutoScroll(){
+  if(AUTOSCROLL.running) stopAutoScroll();
+}
+
+/** 阅读器内的轻提示（2 秒后自动消失） */
+let _toastTimer = null;
+function showReaderToast(msg){
+  let el = document.getElementById('readerToast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'readerToast';
+    el.className = 'reader-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(()=>{ el.classList.remove('on'); }, 2000);
+}
+
+/* ============================================================
+ * 十二、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
  * 纯前端：设置存 localStorage，不涉及代理层
  * ============================================================ */
 
@@ -894,14 +1051,16 @@ function loadReaderPrefs(){
     if(p.imgWidth) state.imgWidth = p.imgWidth;
     if(typeof p.widthPct === 'number') state.widthPct = p.widthPct;
     if(typeof p.brightness === 'number') state.brightness = p.brightness;
+    if(typeof p.autoSpeed === 'number') state.autoSpeed = p.autoSpeed;
   }catch(e){}
   // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
   if(state.imgWidth === 'full'){ state.imgWidth = 'custom'; state.widthPct = 100; }
   applyImgWidth();
   applyBrightness();
+  applyAutoSpeedUI();
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed})); }catch(e){}
 }
 
 function toggleReaderTools(){
@@ -993,7 +1152,7 @@ function jumpToChapter(i){
 }
 
 /* ============================================================
- * 十二、书源规则面板（让"规则驱动"可见）
+ * 十三、书源规则面板（让"规则驱动"可见）
  * ============================================================ */
 function toggleRules(){
   const p = document.getElementById('rulesPanel');
@@ -1014,7 +1173,7 @@ function renderRulesPanel(){
 }
 
 /* ============================================================
- * 十三、本地阅读进度
+ * 十四、本地阅读进度
  * ============================================================ */
 function saveHistory(){
   if(!state.comic) return;
@@ -1038,7 +1197,7 @@ function renderHistory(){
 }
 
 /* ============================================================
- * 十四、工具
+ * 十五、工具
  * ============================================================ */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ n = Number(n)||0; return n >= 10000 ? (n/10000).toFixed(1)+'万' : String(n); }
@@ -1052,9 +1211,11 @@ document.addEventListener('keydown', e=>{
     return;
   }
   if(state.view!=='reader') return;
-  // 输入框聚焦时不劫持按键
+  // 输入框/滑杆聚焦时不劫持按键，也不停止自动滚动（要能在滚动中调速度）
   const tag = (e.target && e.target.tagName) || '';
   if(tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+  // 用户按键 → 停止自动滚动，避免抢控制权
+  userInterruptAutoScroll();
 
   switch(e.key){
     case 'ArrowRight': nextChapter(); break;
@@ -1089,12 +1250,17 @@ document.addEventListener('keydown', e=>{
 });
 
 /* ============================================================
- * 十五、启动：先拉书源规则，再按规则取首页数据
+ * 十六、启动：先拉书源规则，再按规则取首页数据
  * ============================================================ */
 (async function boot(){
-  loadReaderPrefs();     // 先应用显示设置（宽度/亮度），再渲染
+  loadReaderPrefs();     // 先应用显示设置（宽度/亮度/速度），再渲染
   await loadRules();
   navigate('home');
 })();
+
+/* 用户主动滚动（滚轮/触摸）→ 停止自动滚动，避免抢控制权
+   注意：自动滚动自身用 window.scrollTo，不触发 wheel/touch 事件，不会自我中断 */
+window.addEventListener('wheel', ()=>{ if(state.view==='reader') userInterruptAutoScroll(); }, {passive:true});
+window.addEventListener('touchstart', ()=>{ if(state.view==='reader') userInterruptAutoScroll(); }, {passive:true});
 </script>
 </body></html>

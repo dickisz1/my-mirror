@@ -102,7 +102,7 @@ my-mirror/
 6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
 7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，1100 行）
+### `manga_reader.html`（前端，1266 行）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
@@ -117,6 +117,7 @@ my-mirror/
    - **连续阅读**（`toggleContinuous` / `preloadNextChapter` / `setupContinuousLoader`）：滚到底自动把下一话图片追加到页面底部，不翻页
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
    - **顶栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `stickyOffset`）：鼠标移近顶部 80px 唤出，离开 2 秒淡出
+   - **自动滚动**（`toggleAutoScroll` / `setAutoSpeed` / `autoScrollTick`）：速度滑杆 10–300 px/s，滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
    - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
 4. **阅读历史**：`localStorage` 存储最近 20 本阅读记录
@@ -146,9 +147,21 @@ my-mirror/
 - 亮度通过 `#readerArea` 的 `--reader-brightness` CSS 变量驱动 `filter:brightness()`，不要直接写 `filter` 内联样式。
 - 设置持久化在 `localStorage.manga_prefs`，与 `manga_history` / `manga_pos` 相互独立。
 
+#### 自动滚动的约定
+
+- 速度滑杆 `#speedRange`（10–300 px/s，步长 10）存 `state.autoSpeed`，持久化在 `manga_prefs.autoSpeed`。
+- 推进公式：`window.scrollTo(0, scrollY + autoSpeed * dt / 1000)`，`dt` 由 `requestAnimationFrame` 时间戳相减得出。
+- **`dt` 必须限幅**（`AUTOSCROLL.MAX_FRAME_MS = 100`）：标签页被切走后回来，`dt` 会是几千毫秒，不限幅会瞬间跳一大段。
+- **首帧不移动**：第一帧只建立 `last` 基准（`dt = 0`），否则会用到无意义的时间差。
+- 滚到底时：连续阅读开着就调 `preloadNextChapter()`，新内容撑开后自动继续；卡住超过 `AUTOSCROLL.STUCK_MS`(4000ms) 页面没长高 → 停止并提示。
+- 判断"是否最后一话"必须用 `state.chapIdx`（最后已加载话），**不能用 `viewChapIdx`**——后者是用户视口所在话，预加载失败时会误报"加载失败"。
+- 中断：`wheel` / `touchstart` / 键盘（输入框与滑杆聚焦时除外）→ 立即 `stopAutoScroll()`。自动滚动自身走 `window.scrollTo`，不触发这些事件，不会自我中断。
+- 速度滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
+- 离开阅读器（`navigate` 非 reader 分支）调用 `stopAutoScroll()`。
+
 #### 阅读器顶栏（`.reader-top`）的约定
 
-- 顶栏是阅读器内的操作条（`#readerMeta` / `#progressTxt` / `#progressBar` + 6 个按钮），**不是**站点 `<header>`，两者都在 `position:sticky; top:0`。
+- 顶栏是阅读器内的操作条（`#readerMeta` / `#progressTxt` / `#progressBar` + 7 个按钮），**不是**站点 `<header>`，两者都在 `position:sticky; top:0`。
 - **z-index 必须高于站点 header**（header=100，顶栏=200）。曾因顶栏 z-index=50 低于 header，滚动后两者都吸到 top:0，顶栏被 header 完全盖住（表现为"往下翻就不见了"）。
 - 自动隐藏：鼠标 `clientY <= READER_TOPBAR.REVEAL_ZONE`(80px) 唤出；离开后 `HIDE_DELAY`(2000ms) 淡出（`.reader-top.hidden` 用 `translateY(-100%)+opacity:0`）。
 - 鼠标悬停在顶栏上（`:hover`）时不隐藏，避免操作到一半消失。
