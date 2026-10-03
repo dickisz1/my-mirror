@@ -683,7 +683,15 @@ function updateProgressUI(){
   if(i < 0) return;
   state.viewPos = i;
   const r = chapterAt(i);
+  const prevChap = state.viewChapIdx;
   if(r) state.viewChapIdx = r.idx;
+
+  // 顶栏 meta 跟随"视口所在话"更新（预加载时不更新，避免剧透）
+  if(r && r.idx !== prevChap){
+    const meta = document.getElementById('readerMeta');
+    const ch = state.chapters[r.idx];
+    if(meta) meta.textContent = (r.title || (ch && ch.title) || ('第' + (r.idx+1) + '话')) + ' · ' + (r.count || '?') + '图';
+  }
 
   const bar = document.getElementById('progressBar');
   const txt = document.getElementById('progressTxt');
