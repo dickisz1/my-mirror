@@ -58,6 +58,12 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 .filter-bar button.active,.filter-bar button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 #loadMore{display:block;width:100%;margin-top:16px;padding:12px;background:transparent;border:1px dashed var(--ln);color:var(--mut);border-radius:8px;cursor:pointer;font-size:13px}
 #loadMore:hover{border-color:var(--accent);color:var(--accent)}
+/* 连续阅读模式 */
+.chap-sep{display:flex;align-items:center;gap:12px;margin:32px 0 16px;color:var(--mut);font-size:13px}
+.chap-sep::before,.chap-sep::after{content:'';flex:1;height:1px;background:var(--ln)}
+.chap-sep .sep-title{color:var(--accent);font-weight:600;white-space:nowrap}
+#readerArea.continuous .imgwrap{margin-bottom:4px}
+#readerArea.continuous .imgwrap img{cursor:default}
 </style></head><body>
 
 <header>
@@ -125,6 +131,7 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
         <button onclick="prevChapter()">上一话</button>
         <button onclick="nextChapter()">下一话</button>
         <button onclick="toggleRules()">🔧 书源规则</button>
+        <button onclick="toggleContinuous()" id="btnContinuous">📜 连续阅读</button>
       </div>
     </div>
     <div id="rulesPanel"></div>
@@ -223,7 +230,11 @@ const state = {
   chapIdx:0,
   homeType:0,        // 分类页栏目 type
   homePage:1,
-  homeTotal:1
+  homeTotal:1,
+  continuous:false,   // 连续阅读模式
+  loadedChaps:{},    // 已加载章节 {idx: true}
+  loadingNext:false, // 正在加载下一章
+  flatImgs:[]        // 全局图片列表，下标 = 图片 data-i（跨章节连续）
 };
 
 /* ============================================================
@@ -238,6 +249,21 @@ function navigate(view){
   const map = {home:'btnHome', category:'btnCategory', search:'btnSearch'};
   if(map[view]) document.getElementById(map[view]).classList.add('active');
   window.scrollTo(0,0);
+  if(view !== 'reader' && state.continuous){
+    state.continuous = false;
+    state.loadedChaps = {};
+    state.flatImgs = [];
+    if(observer) observer.disconnect();
+    if(continuousObserver) continuousObserver.disconnect();
+    const area = document.getElementById('readerArea');
+    if(area) area.classList.remove('continuous');
+    const btn = document.getElementById('btnContinuous');
+    if(btn){
+      btn.style.background = 'transparent';
+      btn.style.color = 'var(--mut)';
+      btn.style.borderColor = 'var(--ln)';
+    }
+  }
   if(view==='home') renderHome();
   if(view==='category') renderCategory();
   if(view==='search') renderSearch();
@@ -395,11 +421,19 @@ async function openChapter(idx){
     const d = await apiGet('/api/comic/image/' + ch.id, {page:1, page_size:500, image_source:''});
     const imgs = (d && d.images) || [];
     if(!imgs.length){ area.innerHTML = '<div class="empty-state">本话无图片</div>'; return; }
+    state.flatImgs = imgs.slice();   // 下标 = data-i，跨章节连续
     area.innerHTML = imgs.map((im,i)=>
       `<figure class="imgwrap loading" id="fig-${i}">
          <img class="cimg" data-i="${i}" alt="第${i+1}页" loading="lazy" onload="imgOk(this)" onerror="imgFail(this)">
        </figure>`).join('');
-    setupLazy(imgs);
+    ensureSentinel();
+    setupLazy();
+    if(state.continuous){
+      state.loadedChaps = {};
+      state.loadedChaps[idx] = true;
+      setupContinuousLoader();
+      preloadNextChapter();
+    }
   }catch(e){
     area.innerHTML = '<div class="empty-state err">图片列表取数失败: '+esc(e.message)+'</div>';
   }
@@ -408,9 +442,10 @@ async function openChapter(idx){
 function prevChapter(){ if(state.chapIdx>0) openChapter(state.chapIdx-1); }
 function nextChapter(){ if(state.chapIdx < state.chapters.length-1) openChapter(state.chapIdx+1); }
 
-/** 懒加载：滑到哪张才通过代理取哪张（代理按备用 CDN 规则 + 解密） */
+/** 懒加载：滑到哪张才通过代理取哪张（代理按备用 CDN 规则 + 解密）
+ *  图片地址统一从 state.flatImgs 取，下标 = img.dataset.i（跨章节全局连续） */
 let observer = null;
-function setupLazy(imgs){
+function setupLazy(){
   if(observer) observer.disconnect();
   observer = new IntersectionObserver(entries=>{
     entries.forEach(en=>{
@@ -419,13 +454,108 @@ function setupLazy(imgs){
       if(img.dataset.done) return;
       img.dataset.done = '1';
       const i = parseInt(img.dataset.i,10);
-      const src = imgs[i] && imgs[i].url;
+      const src = state.flatImgs[i] && state.flatImgs[i].url;
       if(!src){ imgFail(img); return; }
       img.src = toProxyPath(src);
       observer.unobserve(img);
     });
   }, {rootMargin:'300px'});
   document.querySelectorAll('#readerArea .cimg').forEach(im=>observer.observe(im));
+}
+
+/** 底部哨兵：必须始终是 readerArea 的最后一个子节点，否则滚动触发点会跑到页中间 */
+function ensureSentinel(){
+  const area = document.getElementById('readerArea');
+  if(!area) return null;
+  let s = document.getElementById('readerSentinel');
+  if(!s){
+    s = document.createElement('div');
+    s.id = 'readerSentinel';
+    s.style.height = '1px';
+  }
+  area.appendChild(s);   // appendChild 会自动把已存在的节点移到末尾
+  return s;
+}
+
+/* ---------- 连续阅读模式 ---------- */
+function toggleContinuous(){
+  state.continuous = !state.continuous;
+  const btn = document.getElementById('btnContinuous');
+  if(btn){
+    btn.style.background = state.continuous ? 'var(--accent)' : 'transparent';
+    btn.style.color = state.continuous ? '#fff' : 'var(--mut)';
+    btn.style.borderColor = state.continuous ? 'var(--accent)' : 'var(--ln)';
+  }
+  const area = document.getElementById('readerArea');
+  if(area) area.classList.toggle('continuous', state.continuous);
+  if(state.continuous){
+    // 中途开启：补齐当前章节状态，并挂上滚动哨兵，否则后续章节不会自动加载
+    state.loadedChaps[state.chapIdx] = true;
+    ensureSentinel();
+    setupContinuousLoader();
+    preloadNextChapter();
+  }else if(continuousObserver){
+    continuousObserver.disconnect();
+  }
+}
+
+async function preloadNextChapter(){
+  if(!state.continuous || state.loadingNext) return;
+  const nextIdx = state.chapIdx + 1;
+  if(nextIdx >= state.chapters.length) return;
+  if(state.loadedChaps[nextIdx]) return;
+
+  state.loadingNext = true;
+  const ch = state.chapters[nextIdx];
+  if(!ch){ state.loadingNext = false; return; }
+
+  try{
+    const d = await apiGet('/api/comic/image/' + ch.id, {page:1, page_size:500, image_source:''});
+    const imgs = (d && d.images) || [];
+    if(!imgs.length){ state.loadingNext = false; return; }
+
+    const area = document.getElementById('readerArea');
+    const sep = document.createElement('div');
+    sep.className = 'chap-sep';
+    sep.id = 'sep-' + nextIdx;
+    sep.innerHTML = `<span class="sep-title">${esc(ch.title||('第'+ch.sortId+'话'))}</span><span>${imgs.length}图</span>`;
+    area.appendChild(sep);
+
+    // 全局下标：以 flatImgs 长度为准，避免图片加载失败被移除后计数错位
+    const startIdx = state.flatImgs.length;
+    const html = imgs.map((im,i)=>
+      `<figure class="imgwrap loading" id="fig-${startIdx+i}">
+         <img class="cimg" data-i="${startIdx+i}" data-chap="${nextIdx}" alt="第${startIdx+i+1}页" loading="lazy" onload="imgOk(this)" onerror="imgFail(this)">
+       </figure>`).join('');
+    area.insertAdjacentHTML('beforeend', html);
+    ensureSentinel();   // 哨兵移回末尾，保持"滚到底才触发"的语义
+
+    imgs.forEach(im => state.flatImgs.push(im));
+
+    const newImgs = area.querySelectorAll('.cimg[data-chap="'+nextIdx+'"]');
+    newImgs.forEach(im => { if(observer) observer.observe(im); });
+
+    state.loadedChaps[nextIdx] = true;
+    state.chapIdx = nextIdx;
+    document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
+  }catch(e){
+    console.error('预加载下一章失败:', e);
+  }
+  state.loadingNext = false;
+}
+
+let continuousObserver = null;
+function setupContinuousLoader(){
+  if(continuousObserver) continuousObserver.disconnect();
+  continuousObserver = new IntersectionObserver(entries=>{
+    entries.forEach(en=>{
+      if(!en.isIntersecting) return;
+      if(state.continuous && !state.loadingNext){
+        preloadNextChapter();
+      }
+    });
+  }, {rootMargin:'200px'});
+  continuousObserver.observe(ensureSentinel());
 }
 
 function imgOk(img){
