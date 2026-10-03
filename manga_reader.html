@@ -77,7 +77,9 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 #readerTools button.active,#readerTools button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 #readerTools input[type=range]{width:150px;accent-color:var(--accent)}
 #readerTools .val{color:var(--mut);min-width:38px;text-align:right}
-/* 宽度模式：w-fit 适应宽度 / w-full 铺满全宽 / w-orig 原始尺寸 */
+/* 宽度模式：w-fit 适应宽度 / w-full 铺满全宽 / w-orig 原始尺寸
+   注意：阅读器嵌在 .container{max-width:1200px} 内，铺满/原始尺寸需突破该限制 */
+body.reader-wide .container{max-width:none;padding:0}
 #readerArea.w-full{max-width:100%;padding:0}
 #readerArea.w-full .imgwrap{border-radius:0}
 #readerArea.w-orig{max-width:100%;padding:0;overflow-x:auto}
@@ -814,9 +816,12 @@ function setImgWidth(mode){
 function applyImgWidth(){
   const area = document.getElementById('readerArea');
   if(!area) return;
+  const wide = (state.imgWidth === 'full' || state.imgWidth === 'orig');
   area.classList.remove('w-full','w-orig');
   if(state.imgWidth === 'full') area.classList.add('w-full');
   if(state.imgWidth === 'orig') area.classList.add('w-orig');
+  // 铺满/原始尺寸要突破 .container 的 1200px 限宽，否则"全宽"其实铺不满
+  document.body.classList.toggle('reader-wide', wide);
   // 同步按钮高亮
   ['fit','full','orig'].forEach(m=>{
     const b = document.getElementById('wbtn-'+m);
