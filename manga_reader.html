@@ -40,18 +40,14 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .controls{display:flex;flex-wrap:nowrap;flex:0 0 auto;align-items:center;gap:4px}
 .controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;flex:0 0 auto;line-height:1.2}
 .controls button .ic{margin-right:3px}
-.controls button.icon-only .ic{margin-right:0}
-/* 窄屏渐进降级：逐步隐藏次要标签，保证 7 个按钮始终单行不溢出 */
-@media (max-width:1100px){ .progress-txt{display:none} }
-@media (max-width:1000px){
-  .controls button .lb{display:none}          /* 全部按钮收成纯图标 */
-  .controls button{padding:4px 7px}
-  .controls button .ic{margin-right:0}
-}
-@media (max-width:620px){
-  #btnAutoScroll{display:none}                /* 窄屏隐藏自动滚动（可在设置面板调） */
-  .reader-top .meta{flex-basis:60px}
-}
+/* 窄屏渐进降级（由 fitReaderTop() 依据真实换行情况加类，不用 media query：
+   media query 只认视口宽度，无法应对"顶栏可用宽度"变化） */
+.reader-top.compact .controls button .lb{display:none}
+.reader-top.compact .controls button{padding:4px 7px}
+.reader-top.compact .controls button .ic{margin-right:0}
+.reader-top.compact #progressTxt{display:none}
+.reader-top.narrow #btnAutoScroll{display:none}
+.reader-top.narrow .meta{flex-basis:60px}
 #readerArea{padding:20px;max-width:800px;margin:0 auto}
 .imgwrap{position:relative;width:100%;margin-bottom:8px;background:#111;border-radius:4px;overflow:hidden;min-height:120px}
 .imgwrap img{width:100%;display:block;background:#111;object-fit:contain}
@@ -585,6 +581,38 @@ function stickyOffset(){
   return h + 10;
 }
 
+/** 顶栏自适应：检测是否真的换行/溢出，逐级加 compact / narrow 类。
+ *  不用 media query —— 它只认视口宽度，而顶栏可用宽度还受 .container 限宽、
+ *  面板开合、标题长度影响；这里以"实际是否换行"为准，任何宽度都能收敛到单行。 */
+function topbarWrapped(){
+  const rt = document.querySelector('.reader-top');
+  if(!rt) return false;
+  const btns = Array.from(rt.querySelectorAll('.controls button')).filter(b => b.offsetParent !== null);
+  if(btns.length < 2) return false;
+  const tops = new Set(btns.map(b => Math.round(b.getBoundingClientRect().top)));
+  if(tops.size > 1) return true;                       // 按钮自身换行
+  // 顶栏整体是否被撑到多行：控件区右边界超过顶栏右边界即视为溢出
+  const ctr = rt.querySelector('.controls');
+  if(ctr && Math.round(ctr.getBoundingClientRect().right) > Math.round(rt.getBoundingClientRect().right) + 1) return true;
+  return false;
+}
+
+function fitReaderTop(){
+  const rt = document.querySelector('.reader-top');
+  if(!rt) return;
+  if(state.view !== 'reader'){ rt.classList.remove('compact','narrow'); return; }
+  // 从最宽开始，逐步降级直到不换行（最多 3 档，避免抖动）
+  rt.classList.remove('compact','narrow');
+  if(topbarWrapped()) rt.classList.add('compact');
+  if(topbarWrapped()) rt.classList.add('narrow');
+}
+
+let _fitRaf = null;
+function scheduleFitReaderTop(){
+  if(_fitRaf) cancelAnimationFrame(_fitRaf);
+  _fitRaf = requestAnimationFrame(()=>{ _fitRaf = null; fitReaderTop(); });
+}
+
 /** 平滑滚动到指定图片下标（话内位置跳转用） */
 function scrollToImg(i){
   const fig = document.getElementById('fig-'+i);
@@ -803,6 +831,7 @@ function updateProgressUI(){
     const meta = document.getElementById('readerMeta');
     const ch = state.chapters[r.idx];
     if(meta) meta.textContent = (r.title || (ch && ch.title) || ('第' + (r.idx+1) + '话')) + ' · ' + (r.count || '?') + '图';
+    scheduleFitReaderTop();   // 标题长度变了，重新判定单行
   }
 
   const bar = document.getElementById('progressBar');
@@ -832,7 +861,7 @@ window.addEventListener('scroll', ()=>{
   });
 }, {passive:true});
 
-window.addEventListener('resize', ()=>{ if(state.view==='reader') updateProgressUI(); }, {passive:true});
+window.addEventListener('resize', ()=>{ if(state.view==='reader'){ updateProgressUI(); scheduleFitReaderTop(); } }, {passive:true});
 
 /* ============================================================
  * 十、阅读器顶栏自动隐藏（鼠标移近顶部才显示）
@@ -916,6 +945,7 @@ function enterReaderTopbar(){
   bindTopbarAutoHide();
   showTopbar();
   scheduleTopbarHide();
+  scheduleFitReaderTop();   // 进入阅读器先做一次单行自适应
 }
 /** 离开阅读器时复位（恢复显示、关掉面板，便于下次进入重新计时） */
 function leaveReaderTopbar(){
