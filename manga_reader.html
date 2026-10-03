@@ -29,7 +29,9 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .chap-item{padding:10px 14px;border-bottom:1px solid var(--ln);cursor:pointer;display:flex;justify-content:space-between;font-size:13px;transition:background .2s}
 .chap-item:last-child{border-bottom:none}
 .chap-item:hover,.chap-item.active{background:var(--card);color:var(--accent)}
-.reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:50;flex-wrap:wrap}
+.reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:200;flex-wrap:wrap;transition:transform .25s ease,opacity .25s ease}
+/* 自动隐藏：鼠标移近顶部才显示（.hidden 由 JS 切换） */
+.reader-top.hidden{transform:translateY(-100%);opacity:0;pointer-events:none}
 .reader-top .rt-title{font-size:14px;color:var(--accent);cursor:pointer;font-weight:700}
 .reader-top .meta{font-size:13px;color:var(--mut);flex:1}
 .progress{flex:1;min-width:100px;height:4px;background:var(--ln);border-radius:2px;overflow:hidden}
@@ -357,6 +359,9 @@ function navigate(view){
   if(view==='home') renderHome();
   if(view==='category') renderCategory();
   if(view==='search') renderSearch();
+  // 阅读器顶栏自动隐藏：进入时启用，离开时复位
+  if(view === 'reader') enterReaderTopbar();
+  else if(prev === 'reader') leaveReaderTopbar();
 }
 
 /* ============================================================
@@ -543,11 +548,22 @@ async function openChapter(idx){
 function prevChapter(){ if(state.viewChapIdx>0) openChapter(state.viewChapIdx-1); }
 function nextChapter(){ if(state.viewChapIdx < state.chapters.length-1) openChapter(state.viewChapIdx+1); }
 
+/** 当前吸顶栏的总高度（站点 header + 阅读器顶栏），用于滚动定位留白 */
+function stickyOffset(){
+  let h = 0;
+  const hd = document.querySelector('header');
+  const rt = document.querySelector('.reader-top');
+  if(hd) h += hd.getBoundingClientRect().height;
+  // 顶栏自动隐藏时不占位，无需留白
+  if(rt && !rt.classList.contains('hidden')) h += rt.getBoundingClientRect().height;
+  return h + 10;
+}
+
 /** 平滑滚动到指定图片下标（话内位置跳转用） */
 function scrollToImg(i){
   const fig = document.getElementById('fig-'+i);
   if(!fig) return;
-  const top = fig.getBoundingClientRect().top + window.scrollY - 60;  // 60 = 顶栏高度余量
+  const top = fig.getBoundingClientRect().top + window.scrollY - stickyOffset();
   window.scrollTo({top: Math.max(0, top), behavior:'smooth'});
 }
 
@@ -793,7 +809,81 @@ window.addEventListener('scroll', ()=>{
 window.addEventListener('resize', ()=>{ if(state.view==='reader') updateProgressUI(); }, {passive:true});
 
 /* ============================================================
- * 十、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
+ * 十、阅读器顶栏自动隐藏（鼠标移近顶部才显示）
+ * 纯前端 UI 行为，不涉及代理层
+ * ============================================================ */
+const READER_TOPBAR = {
+  REVEAL_ZONE: 80,   // 鼠标进入顶部这个像素带 → 显示
+  HIDE_DELAY: 2000,  // 鼠标离开后多久淡出（毫秒）
+  timer: null,
+  bound: false
+};
+
+function isTopbarShown(){
+  const rt = document.querySelector('.reader-top');
+  return !!rt && !rt.classList.contains('hidden');
+}
+function showTopbar(){
+  const rt = document.querySelector('.reader-top');
+  if(!rt) return;
+  rt.classList.remove('hidden');
+}
+function hideTopbar(){
+  const rt = document.querySelector('.reader-top');
+  if(!rt) return;
+  // 鼠标还停在顶栏上（可能在操作按钮）就不隐藏
+  if(rt.matches(':hover')) return;
+  // 展开的设置/规则面板贴着顶栏，隐藏顶栏会让它们悬空，一并收起
+  const tools = document.getElementById('readerTools');
+  if(tools) tools.classList.remove('on');
+  const rules = document.getElementById('rulesPanel');
+  if(rules) rules.classList.remove('on');
+  rt.classList.add('hidden');
+}
+/** 鼠标离开后延时隐藏；移回顶部会取消 */
+function scheduleTopbarHide(){
+  clearTimeout(READER_TOPBAR.timer);
+  READER_TOPBAR.timer = setTimeout(()=>{ if(state.view === 'reader') hideTopbar(); }, READER_TOPBAR.HIDE_DELAY);
+}
+
+function onReaderMouseMove(e){
+  if(state.view !== 'reader') return;
+  if(e.clientY <= READER_TOPBAR.REVEAL_ZONE){
+    clearTimeout(READER_TOPBAR.timer);
+    showTopbar();
+  }else if(isTopbarShown()){
+    scheduleTopbarHide();
+  }
+}
+
+/** 绑定一次全局监听；仅阅读器视图生效 */
+function bindTopbarAutoHide(){
+  if(READER_TOPBAR.bound) return;
+  READER_TOPBAR.bound = true;
+  document.addEventListener('mousemove', onReaderMouseMove, {passive:true});
+  // 鼠标离开窗口 / 切到别的标签页 → 直接隐藏，回来时靠 mousemove 唤出
+  document.addEventListener('mouseleave', ()=>{
+    if(state.view === 'reader'){ clearTimeout(READER_TOPBAR.timer); hideTopbar(); }
+  });
+  window.addEventListener('blur', ()=>{
+    if(state.view === 'reader'){ clearTimeout(READER_TOPBAR.timer); hideTopbar(); }
+  });
+}
+
+/** 进入阅读器时启用（顶栏初始显示，鼠标不动 2 秒后自动收起） */
+function enterReaderTopbar(){
+  bindTopbarAutoHide();
+  showTopbar();
+  scheduleTopbarHide();
+}
+/** 离开阅读器时复位（恢复显示并解绑状态，便于下次进入重新计时） */
+function leaveReaderTopbar(){
+  clearTimeout(READER_TOPBAR.timer);
+  showTopbar();
+}
+
+/* ============================================================
+ * 十一、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
  * 纯前端：设置存 localStorage，不涉及代理层
  * ============================================================ */
 
@@ -903,7 +993,7 @@ function jumpToChapter(i){
 }
 
 /* ============================================================
- * 十一、书源规则面板（让"规则驱动"可见）
+ * 十二、书源规则面板（让"规则驱动"可见）
  * ============================================================ */
 function toggleRules(){
   const p = document.getElementById('rulesPanel');
@@ -924,7 +1014,7 @@ function renderRulesPanel(){
 }
 
 /* ============================================================
- * 十二、本地阅读进度
+ * 十三、本地阅读进度
  * ============================================================ */
 function saveHistory(){
   if(!state.comic) return;
@@ -948,7 +1038,7 @@ function renderHistory(){
 }
 
 /* ============================================================
- * 十三、工具
+ * 十四、工具
  * ============================================================ */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ n = Number(n)||0; return n >= 10000 ? (n/10000).toFixed(1)+'万' : String(n); }
@@ -999,7 +1089,7 @@ document.addEventListener('keydown', e=>{
 });
 
 /* ============================================================
- * 十三、启动：先拉书源规则，再按规则取首页数据
+ * 十五、启动：先拉书源规则，再按规则取首页数据
  * ============================================================ */
 (async function boot(){
   loadReaderPrefs();     // 先应用显示设置（宽度/亮度），再渲染

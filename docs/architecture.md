@@ -169,19 +169,24 @@ preloadNextChapter():
 ```
 用户点「🎨 设置」(toggleReaderTools)
    │
-   ├── 图片宽度：setImgWidth('fit'|'full'|'orig')
-   │     └── applyImgWidth()：给 #readerArea 加 w-full / w-orig，
+   ├── 图片宽度滑杆：#widthRange (30–100%) → setImgWidthPct(v)
+   │     └── applyImgWidth()：给 #readerArea 加 w-pct，
+   │         宽度取自 CSS 变量 --reader-w（vw 单位），
    │         并给 <body> 加 reader-wide 解除 .container 限宽
+   │
+   ├── 图片宽度预设：setImgWidth('fit'|'orig')
+   │     └── fit = 800px 上限；orig = 原始像素（w-orig）
    │
    └── 亮度：setBrightness(30–130)
          └── applyBrightness()：设置 #readerArea 的 --reader-brightness
               CSS 变量 → filter:brightness()
    │
    ▼
-saveReaderPrefs() → localStorage.manga_prefs
+saveReaderPrefs() → localStorage.manga_prefs {imgWidth, widthPct, brightness}
    │
    ▼
 下次启动 boot() → loadReaderPrefs() → 恢复宽度模式与亮度
+（旧值 imgWidth:'full' 自动迁移为 custom 100%）
 
 用户点「📖 章节」(openJumpPanel)
    │
@@ -193,6 +198,34 @@ saveReaderPrefs() → localStorage.manga_prefs
 （点当前话直接返回，不重新加载）
 Esc 或点 ✕ → closeJumpPanel()
 ```
+
+### 阅读器顶栏自动隐藏的数据流
+
+```
+进入阅读器 navigate('reader') → enterReaderTopbar()
+   │
+   ├── bindTopbarAutoHide()：绑定 document mousemove / mouseleave + window blur（只绑一次）
+   ├── showTopbar()：移除 .reader-top.hidden
+   └── scheduleTopbarHide()：2 秒后 hideTopbar()
+   │
+   ▼
+鼠标移动 onReaderMouseMove(e)（仅 state.view === 'reader' 生效）
+   ├── e.clientY <= 80  → clearTimeout + showTopbar()
+   └── 否则若顶栏可见 → scheduleTopbarHide()（2 秒后 hideTopbar）
+   │
+   ▼
+hideTopbar()
+   ├── 若顶栏 :hover（鼠标还停在上面）→ 跳过，不隐藏
+   ├── 收起 #readerTools 与 #rulesPanel（避免悬空）
+   └── 加 .reader-top.hidden（translateY(-100%) + opacity:0 + pointer-events:none）
+   │
+   ▼
+mouseleave / window blur → 立即隐藏（不等 2 秒）
+
+离开阅读器 navigate(非 reader) → leaveReaderTopbar() → 复位为显示
+```
+
+> 注意：`.reader-top` 的 `z-index` 必须高于站点 `header`（100），否则滚动吸顶后顶栏被 header 盖住，表现为"往下翻就不见了"——这是曾经的 bug。
 
 ## 各逻辑层职责
 
@@ -293,8 +326,10 @@ Esc 或点 ✕ → closeJumpPanel()
 7. **连续阅读的索引契约**：图片 `data-i` 是跨章节全局连续下标，与 `state.flatImgs` 一一对应；`#readerSentinel` 必须始终是 `#readerArea` 的最后一个子节点
 8. **运行时**：`api/proxy.js` 依赖 `fs`/`path`/`http`/`https`/`crypto`，不能改成 Edge Runtime
 9. **两个话号的语义**：`chapIdx` = 最后已加载话（驱动预加载），`viewChapIdx` = 视口所在话（显示/历史/跳转高亮）。不可混用
-10. **宽度模式与限宽**：`full`/`orig` 依赖 `body.reader-wide` 解除 `.container` 的 1200px 限宽；改动 `.container` 样式时须一并检查
+10. **宽度模式与限宽**：`custom`/`orig` 依赖 `body.reader-wide` 解除 `.container` 的 1200px 限宽；改动 `.container` 样式时须一并检查
 11. **localStorage 键**：`manga_history`（历史）、`manga_pos`（话内位置）、`manga_prefs`（显示设置）三者独立，改名会导致用户数据丢失
+12. **顶栏层级**：`.reader-top` 的 `z-index` 必须 > 站点 `header` 的 100，否则滚动吸顶后顶栏被 header 盖住（表现为"往下翻就不见了"）
+13. **顶栏自动隐藏参数**：`READER_TOPBAR.REVEAL_ZONE`(80px) 与 `HIDE_DELAY`(2000ms)；隐藏态是 `.reader-top.hidden`，改动时须同步 `stickyOffset()` 的留白计算
 
 ## 风险清单
 
