@@ -48,6 +48,7 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .reader-top.compact #progressTxt{display:none}
 .reader-top.narrow #btnAutoScroll{display:none}
 .reader-top.narrow .meta{flex-basis:60px}
+.reader-top.ultra .progress{display:none}   /* 极窄：进度条让位，仅保留图标与标题 */
 #readerArea{padding:20px;max-width:800px;margin:0 auto}
 .imgwrap{position:relative;width:100%;margin-bottom:8px;background:#111;border-radius:4px;overflow:hidden;min-height:120px}
 .imgwrap img{width:100%;display:block;background:#111;object-fit:contain}
@@ -607,11 +608,12 @@ function topbarWrapped(){
 function fitReaderTop(){
   const rt = document.querySelector('.reader-top');
   if(!rt) return;
-  if(state.view !== 'reader'){ rt.classList.remove('compact','narrow'); return; }
-  // 从最宽开始，逐步降级直到不换行（最多 3 档，避免抖动）
-  rt.classList.remove('compact','narrow');
+  if(state.view !== 'reader'){ rt.classList.remove('compact','narrow','ultra'); return; }
+  // 从最宽开始逐级降级，每加一档就重新判定，直到不换行（最多 3 档）
+  rt.classList.remove('compact','narrow','ultra');
   if(topbarWrapped()) rt.classList.add('compact');
   if(topbarWrapped()) rt.classList.add('narrow');
+  if(topbarWrapped()) rt.classList.add('ultra');
 }
 
 let _fitRaf = null;
