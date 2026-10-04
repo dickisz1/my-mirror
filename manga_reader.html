@@ -65,6 +65,7 @@ body.in-reader #readerTools,body.in-reader #rulesPanel{position:fixed;left:0;rig
 footer{text-align:center;padding:20px;color:var(--mut);font-size:11px;border-top:1px solid var(--ln);margin-top:40px;line-height:1.8}
 .empty-state{text-align:center;padding:40px;color:var(--mut)}.empty-state .icon{font-size:48px;margin-bottom:12px}
 .src-badge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid var(--ln);color:var(--mut);margin-left:6px}
+.src-select{display:inline-block;font-size:10px;padding:2px 4px;border-radius:3px;border:1px solid var(--ln);color:var(--mut);background:var(--card);margin-left:4px;cursor:pointer;font-family:inherit;vertical-align:middle}
 #rulesPanel{background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:14px;margin-bottom:20px;font-size:12px;display:none}
 #rulesPanel.on{display:block}
 #rulesPanel h3{font-size:13px;color:var(--accent);margin-bottom:10px}
@@ -142,7 +143,9 @@ body.zoomed{overflow:hidden}
 </style></head><body>
 
 <header>
-  <div class="logo" onclick="navigate('home')">漫蛙漫画 <span class="src-badge" id="srcBadge">书源加载中…</span></div>
+  <div class="logo" onclick="navigate('home')">漫蛙漫画 <span class="src-badge" id="srcBadge">书源加载中…</span>
+    <select id="srcSelect" class="src-select" onchange="switchSource(this.value)" title="切换书源"></select>
+  </div>
   <nav>
     <button id="btnHome" class="active" onclick="navigate('home')">首页</button>
     <button id="btnCategory" onclick="navigate('category')">分类</button>
@@ -279,12 +282,15 @@ body.zoomed{overflow:hidden}
 <script>
 /* ============================================================
  * 一、书源规则配置（前端内联默认值）
- * 权威副本在 api/proxy.js，启动时通过 /api/source/rules 拉取覆盖。
+ * 权威副本在 api/proxy.js 的 SOURCES 注册表；启动时通过
+ * /api/source/rules?src=<key> 拉取当前源规则覆盖。
  * 去哪里取数据、怎么取，全部由这张表决定。
  * ============================================================ */
 const PROXY = '/api/proxy?p=';
+const DEFAULT_SRC_KEY = 'manwaxu';
 
 const BOOK_SOURCES_DEFAULT = {
+  key: 'manwaxu',
   name: '漫蛙漫画',
   version: '2.0.0',
   baseUrl: 'https://manwaxu.cc',
@@ -300,15 +306,63 @@ const BOOK_SOURCES_DEFAULT = {
     images:   { desc: '图片列表', path: '/api/comic/image/{cid}',   params: ['page','page_size','image_source'] },
     announce: { desc: '公告',     path: '/api/announcements',       params: [] }
   },
+  homeSections: [
+    { grid: 'popularGrid',  title: '🔥 热门推荐', key: 'comicList' },
+    { grid: 'latestGrid',   title: '🆕 最新更新', key: 'gufengList' },
+    { grid: 'vipGrid',      title: '⭐ VIP专区',  key: 'vipList' },
+    { grid: 'gufengGrid',   title: '🌙 古风',     key: 'gufengList' },
+    { grid: 'xuanhuanGrid', title: '⚔ 玄幻',      key: 'xuanhuanList' },
+    { grid: 'xiaoyuanGrid', title: '🎒 校园',     key: 'xiaoyuanList' }
+  ],
   imageRule: { desc: '图片资源', match: '/en_images/', cdn: true, decrypt: true }
 };
 
 let BOOK_SOURCES = BOOK_SOURCES_DEFAULT;
+let SRC_KEY = DEFAULT_SRC_KEY;          // 当前源 key（随每个请求带上）
+let SRC_LIST = [];                      // /api/sources 返回的源列表
 
-/* 拉取权威规则表；失败则沿用内联默认值 */
+/* 拉取可用源列表（失败则只保留默认源） */
+async function loadSourceList(){
+  try{
+    const r = await fetch(PROXY + encodeURIComponent('/api/sources'), {cache:'no-store'});
+    const j = await r.json();
+    const list = (j && j.data) || [];
+    SRC_LIST = list.length ? list : [{key:DEFAULT_SRC_KEY, name:BOOK_SOURCES_DEFAULT.name, version:BOOK_SOURCES_DEFAULT.version}];
+  }catch(e){
+    SRC_LIST = [{key:DEFAULT_SRC_KEY, name:BOOK_SOURCES_DEFAULT.name, version:BOOK_SOURCES_DEFAULT.version}];
+  }
+  renderSourceSelect();
+}
+
+/** 渲染书源下拉（顶栏） */
+function renderSourceSelect(){
+  const sel = document.getElementById('srcSelect');
+  if(!sel) return;
+  sel.innerHTML = SRC_LIST.map(s=>
+    `<option value="${esc(s.key)}"${s.key===SRC_KEY?' selected':''}>${esc(s.name)}</option>`).join('');
+}
+
+/** 切换书源：重置所有源相关状态并回首页 */
+async function switchSource(key){
+  if(key === SRC_KEY) return;
+  SRC_KEY = key;
+  saveReaderPrefs();
+  // 源相关的数据全部作废（comic id 是源相关的）
+  state.comic = null; state.chapters = []; state.homeList = [];
+  state.viewChapIdx = 0; state.viewPos = 0; state.chapIdx = 0;
+  state.continuous = false; state.loadedChaps = {}; state.chapRanges = [];
+  stopAutoScroll();
+  AUTOSCROLL.anchorPos = null;
+  renderSourceSelect();
+  await loadRules();
+  showReaderToast('已切换书源: ' + BOOK_SOURCES.name, true);
+  navigate('home');
+}
+
+/* 拉取当前源的权威规则表；失败则沿用内联默认值 */
 async function loadRules(){
   try{
-    const r = await fetch(PROXY + encodeURIComponent('/api/source/rules'), {cache:'no-store'});
+    const r = await fetch(PROXY + encodeURIComponent('/api/source/rules') + '&src=' + encodeURIComponent(SRC_KEY), {cache:'no-store'});
     if(!r.ok) throw new Error('rules http '+r.status);
     const j = await r.json();
     if(j && j.rules){ BOOK_SOURCES = j; }
@@ -332,7 +386,7 @@ function buildUrl(path, params){
     });
     qs = parts.join('&');
   }
-  return PROXY + encodeURIComponent(path) + (qs ? '&' + qs : '');
+  return PROXY + encodeURIComponent(path) + (qs ? '&' + qs : '') + '&src=' + encodeURIComponent(SRC_KEY);
 }
 
 async function apiGet(path, params){
@@ -344,12 +398,18 @@ async function apiGet(path, params){
   return j && j.data !== undefined ? j.data : j;
 }
 
-/** 把上游返回的图片绝对地址转成走代理的相对路径 */
-function toProxyPath(u){
+/** 把上游返回的图片绝对地址转成走代理的相对路径（带 src，避免多源串图） */
+function toProxyPath(u, orig){
   if(!u) return '';
   let p = u;
   if(/^https?:\/\//i.test(u)){ try{ p = new URL(u).pathname; }catch(e){ p = u.replace(/^https?:\/\/[^/]+/,''); } }
-  return PROXY + encodeURIComponent(p);
+  // V 键切「原始尺寸」时，用 urlOrig 的路径（pixiv 每页扩展名可能不同）
+  if(orig){
+    let op = orig;
+    if(/^https?:\/\//i.test(orig)){ try{ op = new URL(orig).pathname; }catch(e){ op = orig.replace(/^https?:\/\/[^/]+/,''); } }
+    if(op) p = op;
+  }
+  return PROXY + encodeURIComponent(p) + '&src=' + encodeURIComponent(SRC_KEY);
 }
 
 /* ============================================================
@@ -445,24 +505,38 @@ function cardHtml(item){
 
 async function renderHome(){
   renderHistory();
-  const grids = ['popularGrid','latestGrid','vipGrid','gufengGrid','xuanhuanGrid','xiaoyuanGrid'];
-  grids.forEach(g=>document.getElementById(g).innerHTML='<div class="empty-state"><span class="spinner"></span>按书源规则取数中…</div>');
+  // 栏目由当前源的 homeSections 决定（不同源栏目不同）
+  const secs = BOOK_SOURCES.homeSections || BOOK_SOURCES_DEFAULT.homeSections;
+  const ALL_GRIDS = ['popularGrid','latestGrid','vipGrid','gufengGrid','xuanhuanGrid','xiaoyuanGrid'];
+  const grids = secs.map(s=>s.grid);
+  // 本源没有的栏目要清空，否则会残留上一个源的卡片
+  ALL_GRIDS.forEach(g=>{
+    if(grids.indexOf(g) >= 0) return;
+    const el = document.getElementById(g);
+    if(!el) return;
+    el.innerHTML = '';
+    const sec = el.closest('.section');
+    if(sec) sec.style.display = 'none';
+  });
+  secs.forEach(s=>{
+    const el = document.getElementById(s.grid);
+    if(!el) return;
+    const sec = el.closest('.section');
+    if(sec){ sec.style.display = ''; sec.querySelector('h2').textContent = s.title; }
+  });
+  grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML='<div class="empty-state"><span class="spinner"></span>按书源规则取数中…</div>'; });
   try{
     const d = await apiGet(BOOK_SOURCES.rules.home.path, {page:1, pageSize:12, type:0, flag:1});
     const pick = (k)=> (d && Array.isArray(d[k])) ? d[k] : [];
-    const fill = (gid, list, meta)=>{
+    const fill = (gid, list)=>{
       const el = document.getElementById(gid);
+      if(!el) return;
       if(!list.length){ el.innerHTML='<div class="empty-state">暂无数据</div>'; return; }
       el.innerHTML = list.map(it=>cardHtml(it)).join('');
     };
-    fill('popularGrid', pick('comicList'));
-    fill('latestGrid',  pick('gufengList'));
-    fill('vipGrid',     pick('vipList'));
-    fill('gufengGrid',  pick('gufengList'));
-    fill('xuanhuanGrid',pick('xuanhuanList'));
-    fill('xiaoyuanGrid',pick('xiaoyuanList'));
+    secs.forEach(s=>fill(s.grid, pick(s.key)));
   }catch(e){
-    grids.forEach(g=>document.getElementById(g).innerHTML='<div class="empty-state err">取数失败: '+esc(e.message)+'</div>');
+    grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML='<div class="empty-state err">取数失败: '+esc(e.message)+'</div>'; });
   }
 }
 
@@ -550,6 +624,7 @@ async function openDetail(id){
     const d = await apiGet('/api/comic/' + id + '/chapters');
     const list = (d && d.list) || [];
     state.chapters = list;
+    applySingleChapterUI();   // 单话源：置灰上下话入口
     document.getElementById('chapBadge').textContent = '规则 chapters · 共 ' + list.length + ' 话';
     document.getElementById('chapterList').innerHTML = list.length
       ? list.map((ch,i)=>`<div class="chap-item" onclick="openChapter(${i})">
@@ -610,8 +685,29 @@ async function openChapter(idx){
   }
 }
 
-function prevChapter(){ if(state.viewChapIdx>0) openChapter(state.viewChapIdx-1); }
-function nextChapter(){ if(state.viewChapIdx < state.chapters.length-1) openChapter(state.viewChapIdx+1); }
+/* ---------- 单话源（如 pixiv）：一作品一话，上下话无意义 ---------- */
+/** 是否单话源：仅 1 话且源声明了 fakeChapters */
+function isSingleChapterSource(){
+  const ad = BOOK_SOURCES && BOOK_SOURCES.adapt;
+  return !!(ad && ad.fakeChapters) && state.chapters.length <= 1;
+}
+/** 单话源下把「上一话/下一话」相关入口置灰并给出说明 */
+function applySingleChapterUI(){
+  const single = isSingleChapterSource();
+  document.body.classList.toggle('single-chap', single);
+  ['btnPrev','btnNext'].forEach(id=>{
+    const b = document.getElementById(id);
+    if(b){ b.disabled = single; b.title = single ? '本作品仅 1 话' : ''; }
+  });
+}
+function prevChapter(){
+  if(isSingleChapterSource()){ showReaderToast('本作品仅 1 话'); return; }
+  if(state.viewChapIdx>0) openChapter(state.viewChapIdx-1);
+}
+function nextChapter(){
+  if(isSingleChapterSource()){ showReaderToast('本作品仅 1 话'); return; }
+  if(state.viewChapIdx < state.chapters.length-1) openChapter(state.viewChapIdx+1);
+}
 
 /** 底部操作栏占用高度（用于给内容留白，避免被栏遮住） */
 function stickyOffset(){
@@ -711,8 +807,10 @@ function setupLazy(){
       img.dataset.done = '1';
       const i = parseInt(img.dataset.i,10);
       const src = state.flatImgs[i] && state.flatImgs[i].url;
+      const srcOrig = state.flatImgs[i] && state.flatImgs[i].urlOrig;
       if(!src){ imgFail(img); return; }
-      img.src = toProxyPath(src);
+      // 宽度模式为 orig 时取原图路径（pixiv 每页扩展名可能不同，用 urlOrig 精确路径）
+      img.src = (state.imgWidth === 'orig' && srcOrig) ? toProxyPath(srcOrig) : toProxyPath(src);
       observer.unobserve(img);
     });
   }, {rootMargin:'300px'});
@@ -1333,10 +1431,11 @@ function openCtxMenu(x, y, wrap){
   if(!menu) return;
   const last = state.viewChapIdx >= state.chapters.length - 1;
   const first = state.viewChapIdx <= 0;
+  const single = isSingleChapterSource();   // 单话源：上下话无意义
   const imgUrl = wrap ? (wrap.querySelector('.cimg') && wrap.querySelector('.cimg').getAttribute('src')) : null;
   menu.innerHTML =
-    '<div class="ctx-item" data-act="prev"' + (first ? ' style="opacity:.4"' : '') + '>⏮ 上一话</div>' +
-    '<div class="ctx-item" data-act="next"' + (last ? ' style="opacity:.4"' : '') + '>⏭ 下一话</div>' +
+    '<div class="ctx-item" data-act="prev"' + ((first || single) ? ' style="opacity:.4"' : '') + '>⏮ ' + (single ? '上一话（仅 1 话）' : '上一话') + '</div>' +
+    '<div class="ctx-item" data-act="next"' + ((last || single) ? ' style="opacity:.4"' : '') + '>⏭ ' + (single ? '下一话（仅 1 话）' : '下一话') + '</div>' +
     '<div class="ctx-sep"></div>' +
     '<div class="ctx-item" data-act="jump">📖 章节列表</div>' +
     '<div class="ctx-item" data-act="auto">' + (isAutoScrolling() ? '⏸ 停止自动滚动' : '▶ 自动滚动') + '</div>' +
@@ -1442,6 +1541,7 @@ function loadReaderPrefs(){
     if(p.autoStepMode === 'img' || p.autoStepMode === 'px') state.autoStepMode = p.autoStepMode;
     if(typeof p.autoDwell === 'number') state.autoDwell = p.autoDwell;
     if(typeof p.showToast === 'boolean') state.showToast = p.showToast;
+    if(typeof p.srcKey === 'string' && p.srcKey) SRC_KEY = p.srcKey;   // 记住上次用的书源
   }catch(e){}
   // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
   if(state.imgWidth === 'full'){ state.imgWidth = 'custom'; state.widthPct = 100; }
@@ -1451,7 +1551,7 @@ function loadReaderPrefs(){
   applyAutoStepUI();
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast, srcKey:SRC_KEY})); }catch(e){}
 }
 
 /* ---------- 自动翻张：模式 / 停留 / 提示开关 ---------- */
@@ -1595,17 +1695,24 @@ function toggleRules(){
   else scheduleTopbarHide();
 }
 function renderRulesPanel(){
-  const rows = Object.keys(BOOK_SOURCES.rules).map(k=>{
-    const r = BOOK_SOURCES.rules[k];
+  const rules = BOOK_SOURCES.rules || {};
+  const rows = Object.keys(rules).map(k=>{
+    const r = rules[k];
     return `<tr><td><b>${k}</b></td><td>${esc(r.desc||'')}</td><td><code>${esc(r.path||'')}</code></td><td>${(r.params||[]).join(', ')||'—'}</td></tr>`;
   }).join('');
-  const cdn = (BOOK_SOURCES.imageCdn||[]).map(h=>'<code>'+esc(h)+'</code>').join(' → ');
+  const cdn = (BOOK_SOURCES.imageCdn||[]).map(h=>'<code>'+esc(h)+'</code>').join(' → ') || '—';
+  const ir = BOOK_SOURCES.imageRule || {};
+  const dc = BOOK_SOURCES.decrypt || {};
+  const imgRuleTxt = ir.host ? ('固定 host: ' + esc(ir.host)) : (ir.match ? String(ir.match) : '—');
+  const decTxt = dc.enabled
+    ? `<code>${esc(dc.algo||'')}</code>（前 ${dc.ivBytes||0} 字节 IV + 密文，代理端解密后下发）`
+    : '不加密（明文图片，仅需 Referer）';
   document.getElementById('rulesPanel').innerHTML =
     `<h3>🔧 书源规则 · ${esc(BOOK_SOURCES.name)} v${esc(BOOK_SOURCES.version)}</h3>
-     <div style="color:var(--mut);margin-bottom:8px">数据站点：<code>${esc(BOOK_SOURCES.baseUrl)}</code> · Referer：<code>${esc(BOOK_SOURCES.referer)}</code></div>
+     <div style="color:var(--mut);margin-bottom:8px">数据站点：<code>${esc(BOOK_SOURCES.baseUrl)}</code> · Referer：<code>${esc(BOOK_SOURCES.referer||'')}</code></div>
      <table><tr><th>动作</th><th>说明</th><th>目标路径</th><th>参数</th></tr>${rows}</table>
-     <div style="color:var(--mut);margin-top:10px">图片规则：<code>${esc(BOOK_SOURCES.imageRule.match)}</code> · 备用 CDN 顺序：${cdn}</div>
-     <div style="color:var(--mut);margin-top:6px">图片解密：<code>${esc(BOOK_SOURCES.decrypt.algo)}</code>（前 ${BOOK_SOURCES.decrypt.ivBytes} 字节 IV + 密文，代理端解密后下发）</div>`;
+     <div style="color:var(--mut);margin-top:10px">图片规则：<code>${imgRuleTxt}</code> · 备用 CDN 顺序：${cdn}</div>
+     <div style="color:var(--mut);margin-top:6px">图片解密：${decTxt}</div>`;
 }
 
 /* ============================================================
@@ -1703,7 +1810,8 @@ document.addEventListener('keydown', e=>{
  * 十七、启动：先拉书源规则，再按规则取首页数据
  * ============================================================ */
 (async function boot(){
-  loadReaderPrefs();     // 先应用显示设置（宽度/亮度/速度），再渲染
+  loadReaderPrefs();     // 先应用显示设置（宽度/亮度/速度/书源），再渲染
+  await loadSourceList();
   await loadRules();
   navigate('home');
 })();
