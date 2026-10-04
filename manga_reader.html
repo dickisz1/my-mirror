@@ -674,7 +674,7 @@ async function openChapter(idx){
     updateProgressUI();
     // 话内位置记忆：回到上次看到的那一页（无记录则顶部）
     const saved = loadPos();
-    if(saved && saved.comicId === (state.comic && state.comic.id) && saved.chapIdx === idx && saved.posInChap > 0 && saved.posInChap < imgs.length){
+    if(saved && saved.comicId === (state.comic && state.comic.id) && recSrc(saved) === SRC_KEY && saved.chapIdx === idx && saved.posInChap > 0 && saved.posInChap < imgs.length){
       restorePos(saved.posInChap);
     }else{
       window.scrollTo(0,0);
@@ -782,7 +782,7 @@ function savePos(){
   if(!(posInChap > 0)) return;   // 停在话首不用记
   try{
     localStorage.setItem('manga_pos', JSON.stringify({
-      comicId: state.comic.id, chapIdx: (r ? r.idx : state.viewChapIdx), posInChap: posInChap, time: Date.now()
+      comicId: state.comic.id, src: SRC_KEY, chapIdx: (r ? r.idx : state.viewChapIdx), posInChap: posInChap, time: Date.now()
     }));
   }catch(e){}
 }
@@ -1718,19 +1718,27 @@ function renderRulesPanel(){
 /* ============================================================
  * 十五、本地阅读进度
  * ============================================================ */
+/* ---- 历史 / 位置的源命名空间 ----
+   comicId 是**源相关**的（manwaxu 的 94789 与 pixiv 的 94789 是不同作品），
+   所以每条记录带 src 字段，读取时按当前源过滤。
+   旧记录没有 src 字段 —— 那时只有 manwaxu 一个源，故缺省视为默认源。 */
+function recSrc(rec){ return (rec && rec.src) || DEFAULT_SRC_KEY; }
+
 function saveHistory(){
   if(!state.comic) return;
   const h = JSON.parse(localStorage.getItem('manga_history')||'[]');
-  const idx = h.findIndex(x=>x.comicId===state.comic.id);
+  const idx = h.findIndex(x=>x.comicId===state.comic.id && recSrc(x)===SRC_KEY);
   if(idx>=0) h.splice(idx,1);
   // 记"用户看到的话"（viewChapIdx），不是"最后预加载的话"（chapIdx），否则连续阅读下会记成最新一话
   const r = chapterAt(state.viewPos);
   const posInChap = r ? (state.viewPos - r.start) : state.viewPos;
-  h.unshift({comicId:state.comic.id, title:state.comic.title, cover:state.comic.cover, chapIdx:state.viewChapIdx, posInChap:posInChap, time:Date.now()});
+  h.unshift({comicId:state.comic.id, src:SRC_KEY, title:state.comic.title, cover:state.comic.cover, chapIdx:state.viewChapIdx, posInChap:posInChap, time:Date.now()});
   localStorage.setItem('manga_history', JSON.stringify(h.slice(0,20)));
 }
 function renderHistory(){
-  const h = JSON.parse(localStorage.getItem('manga_history')||'[]');
+  const all = JSON.parse(localStorage.getItem('manga_history')||'[]');
+  // 只显示当前源的记录：跨源 comicId 会指向不存在的作品
+  const h = all.filter(x=>recSrc(x)===SRC_KEY);
   const cg = document.getElementById('continueGrid');
   if(!h.length){ cg.innerHTML='<div class="empty-state"><div class="icon">📚</div>暂无阅读记录</div>'; return; }
   cg.innerHTML = h.slice(0,6).map(x=>`<div class="card" onclick="openDetail(${x.comicId})">
