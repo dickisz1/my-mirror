@@ -236,6 +236,23 @@ body.zoomed{overflow:hidden}
         <span class="val" id="speedVal">60</span>
         <span style="color:var(--mut);font-size:11px">像素/秒 · 滚轮或按键会自动停止</span>
       </div>
+      <div class="row">
+        <label>自动翻张</label>
+        <button id="astep-px" onclick="setAutoStepMode('px')">像素滚动</button>
+        <button id="astep-img" onclick="setAutoStepMode('img')">逐张翻</button>
+        <span style="color:var(--mut);font-size:11px">逐张翻：每次滚到下一张切图，停一下再走</span>
+      </div>
+      <div class="row">
+        <label>张停留</label>
+        <input type="range" id="dwellRange" min="500" max="10000" step="500" value="3000" oninput="setAutoDwell(this.value)">
+        <span class="val" id="dwellVal">3000</span>
+        <span style="color:var(--mut);font-size:11px">毫秒 · 仅「逐张翻」模式生效</span>
+      </div>
+      <div class="row">
+        <label>提示</label>
+        <button id="tst-on"  onclick="setShowToast(true)">显示「第 N 张」</button>
+        <button id="tst-off" onclick="setShowToast(false)">不显示</button>
+      </div>
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
@@ -356,7 +373,10 @@ const state = {
   imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / orig 原始尺寸 / custom 自定义百分比
   widthPct:100,      // 自定义宽度：阅读区宽度占视口的百分比（30–100）
   brightness:100,    // 阅读区亮度百分比（30–130）
-  autoSpeed:60       // 自动滚动速度（像素/秒，10–300）
+  autoSpeed:60,      // 自动滚动速度（像素/秒，10–300）
+  autoStepMode:'px', // 自动推进方式：px 连续像素滚动 / img 逐张翻
+  autoDwell:3000,    // 逐张翻模式下每张停留毫秒（500–10000）
+  showToast:true     // 是否显示「第 N 张」等轻提示
 };
 
 /* ============================================================
@@ -1054,6 +1074,7 @@ function leaveReaderTopbar(){
 const AUTOSCROLL = {
   running: false,
   raf: null,
+  timer: null,        // 逐张翻模式的停留定时器
   last: 0,            // 上一帧时间戳
   stuckSince: 0,      // 卡在底部开始的时间（用于判定预加载失败）
   MAX_FRAME_MS: 100,  // 单帧最大时间差：标签页切回来时防猛跳
@@ -1118,16 +1139,38 @@ function startAutoScroll(){
   AUTOSCROLL.last = 0;
   AUTOSCROLL.stuckSince = 0;
   updateAutoScrollBtn();
-  // 自动滚动时顶栏让位，避免挡住画面
+  // 自动推进时两栏让位，避免挡住画面
   scheduleTopbarHide();
-  AUTOSCROLL.raf = requestAnimationFrame(autoScrollTick);
+  scheduleHeaderHide();
+  // 逐张翻模式：每张停留后再滚到下一张（不用 rAF，用 setTimeout 控制停留）
+  if(state.autoStepMode === 'img') AUTOSCROLL.timer = setTimeout(autoImgStep, state.autoDwell);
+  else AUTOSCROLL.raf = requestAnimationFrame(autoScrollTick);
 }
 
 function stopAutoScroll(){
   if(!AUTOSCROLL.running) return;
   AUTOSCROLL.running = false;
   if(AUTOSCROLL.raf){ cancelAnimationFrame(AUTOSCROLL.raf); AUTOSCROLL.raf = null; }
+  if(AUTOSCROLL.timer){ clearTimeout(AUTOSCROLL.timer); AUTOSCROLL.timer = null; }
   updateAutoScrollBtn();
+}
+
+/** 逐张翻模式：滚到下一张切图 → 停留 autoDwell → 再滚下一张。
+ *  越过本章末张时由 scrollToAdjacentImage 调 navByZone 切下一话。 */
+function autoImgStep(){
+  if(!AUTOSCROLL.running) return;
+  if(state.view !== 'reader'){ stopAutoScroll(); return; }
+  if(isZoomed()){ AUTOSCROLL.timer = setTimeout(autoImgStep, state.autoDwell); return; }  // 放大看细节时暂停推进
+
+  scrollToAdjacentImage(1);   // 已含"末张则下一话"逻辑
+
+  // 到底且无新话可加载 → 停止（与像素模式一致）
+  if(atBottom() && !canGrow() && state.chapIdx >= state.chapters.length - 1){
+    stopAutoScroll();
+    showReaderToast('已是最后一话');
+    return;
+  }
+  AUTOSCROLL.timer = setTimeout(autoImgStep, state.autoDwell);
 }
 
 /** 一帧：按 速度 × 时间差 推进滚动；到底则尝试加载下一话 */
@@ -1182,9 +1225,11 @@ function userInterruptAutoScroll(){
   if(AUTOSCROLL.running) stopAutoScroll();
 }
 
-/** 阅读器内的轻提示（2 秒后自动消失） */
+/** 阅读器内的轻提示（2 秒后自动消失）
+ *  受 state.showToast 控制（设置面板可关）；status 类提示（已关闭提示等）始终显示 */
 let _toastTimer = null;
-function showReaderToast(msg){
+function showReaderToast(msg, force){
+  if(!state.showToast && !force) return;
   let el = document.getElementById('readerToast');
   if(!el){
     el = document.createElement('div');
@@ -1386,15 +1431,57 @@ function loadReaderPrefs(){
     if(typeof p.widthPct === 'number') state.widthPct = p.widthPct;
     if(typeof p.brightness === 'number') state.brightness = p.brightness;
     if(typeof p.autoSpeed === 'number') state.autoSpeed = p.autoSpeed;
+    if(p.autoStepMode === 'img' || p.autoStepMode === 'px') state.autoStepMode = p.autoStepMode;
+    if(typeof p.autoDwell === 'number') state.autoDwell = p.autoDwell;
+    if(typeof p.showToast === 'boolean') state.showToast = p.showToast;
   }catch(e){}
   // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
   if(state.imgWidth === 'full'){ state.imgWidth = 'custom'; state.widthPct = 100; }
   applyImgWidth();
   applyBrightness();
   applyAutoSpeedUI();
+  applyAutoStepUI();
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast})); }catch(e){}
+}
+
+/* ---------- 自动翻张：模式 / 停留 / 提示开关 ---------- */
+function setAutoStepMode(mode){
+  state.autoStepMode = (mode === 'img') ? 'img' : 'px';
+  // 运行中切换模式 → 重启，避免旧定时器/帧继续跑
+  const wasRunning = isAutoScrolling();
+  if(wasRunning) stopAutoScroll();
+  applyAutoStepUI();
+  saveReaderPrefs();
+  if(wasRunning) startAutoScroll();
+  showReaderToast(state.autoStepMode === 'img' ? '逐张翻' : '像素滚动');
+}
+function setAutoDwell(v){
+  let n = parseInt(v,10);
+  if(isNaN(n)) n = 3000;
+  n = Math.min(10000, Math.max(500, n));
+  state.autoDwell = n;
+  applyAutoStepUI();
+  saveReaderPrefs();
+}
+function setShowToast(on){
+  state.showToast = !!on;
+  applyAutoStepUI();
+  saveReaderPrefs();
+  showReaderToast(state.showToast ? '已开启提示' : '已关闭提示', true);   // 状态提示始终显示
+}
+function applyAutoStepUI(){
+  const px = document.getElementById('astep-px'), im = document.getElementById('astep-img');
+  if(px) px.classList.toggle('active', state.autoStepMode === 'px');
+  if(im) im.classList.toggle('active', state.autoStepMode === 'img');
+  const dr = document.getElementById('dwellRange');
+  if(dr) dr.value = state.autoDwell;
+  const dv = document.getElementById('dwellVal');
+  if(dv) dv.textContent = String(state.autoDwell);
+  const on = document.getElementById('tst-on'), off = document.getElementById('tst-off');
+  if(on)  on.classList.toggle('active', state.showToast);
+  if(off) off.classList.toggle('active', !state.showToast);
 }
 
 function toggleReaderTools(){
