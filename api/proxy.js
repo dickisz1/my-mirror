@@ -227,7 +227,16 @@ const SOURCES = {
       },
       tagsJoin: true,       // tags 数组 → 逗号串
       filterMasked: true,   // 过滤 is_masked（无 cookie 取图必失败）
-      fakeChapters: true    // 无章节源 → 合成单话
+      fakeChapters: true,   // 无章节源 → 合成单话
+      /* 搜索端点的字段名与 ranking 不同（实测）：
+         search 用 id/userName/tags[]，ranking 用 illust_id/user_name/view_count */
+      searchField: {
+        id: 'id',
+        title: 'title',
+        pic: 'url',
+        author: 'userName',
+        tags: 'tags'
+      }
     },
 
     homeSections: [
@@ -454,11 +463,13 @@ function buildUpstreamQuery(rule, query, extraParams) {
   return out.toString();
 }
 
-/** 归一化单个列表项 → 前端认的结构 */
-function mapItem(src, raw) {
+/** 归一化单个列表项 → 前端认的结构
+ *  fieldOverride：某些源的列表端点字段名不同（如 pixiv 的 /ranking.php 用
+ *  illust_id/user_name，而 /ajax/search 用 id/userName），故按端点覆盖映射。 */
+function mapItem(src, raw, fieldOverride) {
   const ad = src.adapt;
   if (!ad) return raw;
-  const f = ad.field || {};
+  const f = fieldOverride || ad.field || {};
   const pick = k => {
     const key = f[k];
     return key ? raw[key] : undefined;
@@ -492,11 +503,14 @@ function normalizeList(src, raw, opts) {
   let arr = getByPath(raw, arrPath);
   if (!Array.isArray(arr)) arr = [];
 
+  const field = opts.field || ad.field;
   const out = [];
   for (let i = 0; i < arr.length; i++) {
     const it = arr[i];
     if (ad.filterMasked && it && it.is_masked) continue;   // 需登录，取图必失败
-    out.push(mapItem(src, it));
+    const mapped = mapItem(src, it, field);
+    if (!mapped.id && !mapped.title && !mapped.pic) continue;   // 脏项（字段全取不到）
+    out.push(mapped);
   }
 
   const total = Number(getByPath(raw, ad.totalPath)) || out.length;
@@ -671,7 +685,7 @@ async function serveData(src, action, rule, target, query, req, res) {
       let norm = null;
       if (action === 'detail' || action === 'chapInfo') norm = normalizeDetail(src, j);
       else if (action === 'images') norm = normalizeImages(src, j);
-      else if (action === 'search') norm = normalizeList(src, j, { listPath: src.adapt.searchListPath });
+      else if (action === 'search') norm = normalizeList(src, j, { listPath: src.adapt.searchListPath, field: src.adapt.searchField });
       else if (action === 'home') norm = normalizeList(src, j, null);
       if (norm) out = JSON.stringify(norm);
     }
