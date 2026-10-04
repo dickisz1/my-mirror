@@ -389,6 +389,17 @@ function buildUrl(path, params){
   return PROXY + encodeURIComponent(path) + (qs ? '&' + qs : '') + '&src=' + encodeURIComponent(SRC_KEY);
 }
 
+/** 前端请求路径：规则里 frontPath 优先（前端路径与上游路径可能不同，
+ *  如 pixiv 的前端是 /api/home、上游是 /ranking.php）。
+ *  没有 frontPath 时回落到 path —— 兼容只有单一 path 的源（如 manwaxu）。 */
+function frontPathOf(action, fallback){
+  const r = (BOOK_SOURCES.rules || {})[action];
+  if(r && r.frontPath) return r.frontPath;
+  if(r && r.path && r.path.indexOf('{') < 0 && r.path.charAt(0) === '/' &&
+     !/^__(.+?)__$/.test(r.path)) return r.path;
+  return fallback;
+}
+
 async function apiGet(path, params){
   const url = buildUrl(path, params);
   const r = await fetch(url, {cache:'no-store'});
@@ -526,7 +537,7 @@ async function renderHome(){
   });
   grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML='<div class="empty-state"><span class="spinner"></span>按书源规则取数中…</div>'; });
   try{
-    const d = await apiGet(BOOK_SOURCES.rules.home.path, {page:1, pageSize:12, type:0, flag:1});
+    const d = await apiGet(frontPathOf('home','/api/home'), {page:1, pageSize:12, type:0, flag:1});
     const pick = (k)=> (d && Array.isArray(d[k])) ? d[k] : [];
     const fill = (gid, list)=>{
       const el = document.getElementById(gid);
@@ -560,7 +571,7 @@ async function loadCategory(reset){
   const grid = document.getElementById('categoryGrid');
   if(reset) grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>';
   try{
-    const d = await apiGet(BOOK_SOURCES.rules.home.path, {page:state.homePage, pageSize:12, type:state.homeType, flag:1});
+    const d = await apiGet(frontPathOf('home','/api/home'), {page:state.homePage, pageSize:12, type:state.homeType, flag:1});
     const list = (d && (d.comicList||d.list)) || [];
     state.homeTotal = (d && d.total) || list.length;
     const html = list.map(cardHtml).join('');
@@ -586,7 +597,7 @@ async function renderSearch(){
   if(!q){ grid.innerHTML='<div class="empty-state">输入关键词搜索</div>'; return; }
   grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>搜索中…</div>';
   try{
-    const d = await apiGet(BOOK_SOURCES.rules.search.path, {keyword:q, page:1, pageSize:24});
+    const d = await apiGet(frontPathOf('search','/api/search'), {keyword:q, page:1, pageSize:24});
     const list = (d && d.list) || [];
     grid.innerHTML = list.length
       ? list.map(it=>cardHtml({id:it.id,title:it.title,pic:it.cover||it.pic,author:it.author,tags:it.tags})).join('')
@@ -604,7 +615,7 @@ async function openDetail(id){
   document.getElementById('detailTitle').textContent = '加载中…';
   document.getElementById('chapterList').innerHTML = '<div class="empty-state"><span class="spinner"></span>按详情规则取数中…</div>';
   try{
-    const info = await apiGet('/api/comic/' + id);
+    const info = await apiGet(frontPathOf('detail','/api/comic/') + id);
     state.comic = info;
     document.getElementById('detailCover').src = toProxyPath(info.cover || info.pic);
     document.getElementById('detailTitle').textContent = info.title || '';
@@ -621,7 +632,7 @@ async function openDetail(id){
     document.getElementById('detailDesc').innerHTML = '<span class="err">'+esc(e.message)+'</span>';
   }
   try{
-    const d = await apiGet('/api/comic/' + id + '/chapters');
+    const d = await apiGet(frontPathOf('chapters','/api/comic/') + id + '/chapters');
     const list = (d && d.list) || [];
     state.chapters = list;
     applySingleChapterUI();   // 单话源：置灰上下话入口
@@ -652,7 +663,7 @@ async function openChapter(idx){
   area.innerHTML = '<div class="empty-state"><span class="spinner"></span>按图片规则取数中…</div>';
 
   try{
-    const d = await apiGet('/api/comic/image/' + ch.id, {page:1, page_size:500, image_source:''});
+    const d = await apiGet(frontPathOf('images','/api/comic/image/') + ch.id, {page:1, page_size:500, image_source:''});
     const imgs = (d && d.images) || [];
     if(!imgs.length){ area.innerHTML = '<div class="empty-state">本话无图片</div>'; return; }
     state.flatImgs = imgs.slice();   // 下标 = data-i，跨章节连续
@@ -864,7 +875,7 @@ async function preloadNextChapter(){
   if(!ch){ state.loadingNext = false; return; }
 
   try{
-    const d = await apiGet('/api/comic/image/' + ch.id, {page:1, page_size:500, image_source:''});
+    const d = await apiGet(frontPathOf('images','/api/comic/image/') + ch.id, {page:1, page_size:500, image_source:''});
     const imgs = (d && d.images) || [];
     if(!imgs.length){ state.loadingNext = false; return; }
 

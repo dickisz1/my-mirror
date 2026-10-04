@@ -154,7 +154,8 @@ const SOURCES = {
       /* 首页 = 三张榜单（一次前端请求 → 三个上游请求组装） */
       home: {
         desc: '排行榜',
-        path: '/ranking.php',
+        frontPath: '/api/home',      // 前端请求路径
+        path: '/ranking.php',        // 上游路径（与前端不同！）
         params: ['mode', 'format', 'p', 'content'],
         match: /^\/api\/home$/,
         multi: [
@@ -166,6 +167,7 @@ const SOURCES = {
       /* 搜索词在**路径段**里，不在 query */
       search: {
         desc: '搜索',
+        frontPath: '/api/search',
         path: '/ajax/search/artworks/{keyword}',
         params: ['order', 'mode', 'type', 's_mode'],
         match: /^\/api\/search$/,
@@ -175,6 +177,7 @@ const SOURCES = {
       },
       detail: {
         desc: '作品详情',
+        frontPath: '/api/comic/',
         path: '/ajax/illust/{id}',
         params: [],
         match: /^\/api\/comic\/(\d+)$/,
@@ -183,6 +186,7 @@ const SOURCES = {
       /* pixiv 无章节：合成单话（哨兵路径，由 serveData 的 fakeChapters 分支处理） */
       chapters: {
         desc: '章节（合成单话）',
+        frontPath: '/api/comic/',
         path: '__fake_chapters__',
         params: [],
         match: /^\/api\/comic\/(\d+)\/chapters$/,
@@ -190,6 +194,7 @@ const SOURCES = {
       },
       chapInfo: {
         desc: '章节信息',
+        frontPath: '/api/comic/chapter/info/',
         path: '/ajax/illust/{cid}',
         params: [],
         match: /^\/api\/comic\/chapter\/info\/(\d+)$/,
@@ -197,6 +202,7 @@ const SOURCES = {
       },
       images: {
         desc: '图片列表',
+        frontPath: '/api/comic/image/',
         path: '/ajax/illust/{cid}/pages',
         params: [],
         match: /^\/api\/comic\/image\/(\d+)$/,
@@ -204,6 +210,7 @@ const SOURCES = {
       },
       announce: {
         desc: '公告',
+        frontPath: '/api/announcements',
         path: '/ajax/announcements',
         params: [],
         match: /^\/api\/announcements$/
