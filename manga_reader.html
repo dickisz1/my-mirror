@@ -239,7 +239,7 @@ body.zoomed{overflow:hidden}
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格 翻屏 | J/K 上下话 | 鼠标: 双击放大 · 单击左/右翻话 · 右键菜单</div>
+    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格 翻屏 | J/K 上下话 | 鼠标: 单击 左=上一话 中=放大 右=下一话 · 右键菜单</div>
   </div>
 </div>
 
@@ -1197,8 +1197,6 @@ function showReaderToast(msg){
  *   纯前端，不涉及代理层
  * ============================================================ */
 const MOUSE_UI = {
-  NAV_DELAY: 250,    // 单击等待时长（等不到第二次点击才判定为单击）
-  navTimer: null,    // 单击延时定时器
   zoomed: null,      // 当前放大的 .imgwrap
   zoomOrigin: 0,     // 放大前滚动位置
   bound: false       // 事件是否已绑定
@@ -1224,25 +1222,27 @@ function unzoomImage(){
   window.scrollTo(0, MOUSE_UI.zoomOrigin);
 }
 
-/* ---------- 单击左/右区域翻话 ---------- */
-/** 取视口中心的 .imgwrap 作为参考，判断点击落在左区还是右区 */
-function navZoneAt(clientX){
+/* ---------- 单击分区：左=上一话 / 中=放大切换 / 右=下一话（Pixiv 模型） ---------- */
+/** 判断点击落在图片的左/中/右哪一区；不在图片内返回 null */
+function clickZoneAt(clientX){
   const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
   if(!figs.length) return null;
-  // 找当前视口里最靠上的那张图，用它作为"页面"的水平边界
+  // 取当前视口内最靠上的那张图作为"页面"边界（记元素本身，不是 rect）
   let target = null, best = Infinity;
   for(const f of figs){
     const r = f.getBoundingClientRect();
     if(r.bottom <= 0) continue;
-    if(r.top < best){ best = r.top; target = f; }   // 记元素本身（不是 rect）
+    if(r.top < best){ best = r.top; target = f; }
   }
   if(!target) target = figs[figs.length - 1];
   const r = target.getBoundingClientRect();
+  if(clientX < r.left || clientX > r.right) return null;   // 图片左右留白区不响应
   const third = r.width / 3;
-  if(clientX < r.left + third) return 'prev';
-  if(clientX > r.right - third) return 'next';
-  return null;   // 中间区域不翻话（与 Pixiv 中央=放大的语义错开，避免误触）
+  if(clientX < r.left + third) return { zone: 'prev', wrap: target };
+  if(clientX > r.right - third) return { zone: 'next', wrap: target };
+  return { zone: 'center', wrap: target };                 // 中央 = 放大切换
 }
+
 function navByZone(zone){
   if(zone === 'prev'){
     if(state.viewChapIdx > 0){ showReaderToast('上一话'); prevChapter(); }
@@ -1251,16 +1251,6 @@ function navByZone(zone){
     if(state.viewChapIdx < state.chapters.length - 1){ showReaderToast('下一话'); nextChapter(); }
     else showReaderToast('已是最后一话');
   }
-}
-function scheduleNav(zone){
-  cancelNav();
-  MOUSE_UI.navTimer = setTimeout(()=>{
-    MOUSE_UI.navTimer = null;
-    if(state.view === 'reader') navByZone(zone);
-  }, MOUSE_UI.NAV_DELAY);
-}
-function cancelNav(){
-  if(MOUSE_UI.navTimer){ clearTimeout(MOUSE_UI.navTimer); MOUSE_UI.navTimer = null; }
 }
 
 /* ---------- 右键快捷菜单 ---------- */
@@ -1318,7 +1308,6 @@ function copyCurrentImage(){
 
 /* ---------- 离开阅读器时复位鼠标交互状态 ---------- */
 function resetReaderMouseUI(){
-  cancelNav();
   closeCtxMenu();
   if(isZoomed()) unzoomImage();
 }
@@ -1330,34 +1319,28 @@ function bindReaderMouseUI(){
   const area = document.getElementById('readerArea');
   if(!area) return;
 
-  // 双击图片 → 放大/复原；双击空白处 → 复原
-  area.addEventListener('dblclick', e=>{
-    if(state.view !== 'reader') return;
-    cancelNav();                                   // 双击时取消待判定的单击
-    const wrap = e.target.closest ? e.target.closest('.imgwrap') : null;
-    if(isZoomed()){ unzoomImage(); return; }
-    if(wrap) toggleZoom(wrap);
-  });
-
-  // 单击左/右区域 → 上一话/下一话（延时判定，避开双击）
+  /* 单击分区（Pixiv 模型，无需延时判定，也就不存在"双击误翻话"的冲突）：
+       左 1/3 → 上一话 ｜ 中央 1/3 → 放大切换 ｜ 右 1/3 → 下一话
+     放大态下任意单击 = 复原。 */
   area.addEventListener('click', e=>{
     if(state.view !== 'reader') return;
-    if(isZoomed()){ unzoomImage(); return; }       // 放大态下单击 = 复原
     if(e.button !== 0) return;
-    const zone = navZoneAt(e.clientX);
-    if(zone) scheduleNav(zone);
+    if(isZoomed()){ unzoomImage(); return; }
+    const hit = clickZoneAt(e.clientX);
+    if(!hit) return;
+    if(hit.zone === 'center'){ toggleZoom(hit.wrap); return; }
+    navByZone(hit.zone);
   });
 
   // 右键 → 快捷菜单
   area.addEventListener('contextmenu', e=>{
     if(state.view !== 'reader') return;
     e.preventDefault();
-    cancelNav();
     const wrap = e.target.closest ? e.target.closest('.imgwrap') : null;
     openCtxMenu(e.clientX, e.clientY, wrap);
   });
 
-  // 点击菜单项 / 点击别处 / Esc / 滚动 → 关闭菜单
+  // 点击菜单项 / 点击别处 / 滚动 → 关闭菜单
   const menu = document.getElementById('ctxMenu');
   if(menu) menu.addEventListener('click', onCtxMenuClick);
   document.addEventListener('click', e=>{
