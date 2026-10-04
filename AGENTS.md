@@ -8,8 +8,14 @@
 
 核心流程：用户打开浏览器 → 访问站点 → 看到阅读器界面 → 在界面上点漫画/选章节/往下滑 → 前端按书源规则去真实网站取数据 → 全部经代理中转 → 漫画图片正常显示。
 
-数据来源站点：**manwaxu.cc**（前端 `BOOK_SOURCES_DEFAULT.baseUrl` 与代理端 `BOOK_SOURCES.baseUrl` 一致）。
-图片来源 CDN（备用链，按优先级）：`tu.mhttu.cc` → `mwtuwu.cc` → `tu.mwzu.cc` → `mwtusi.cc`。
+已注册两个书源（详见「书源定义」一节）：
+
+| key | 名称 | 数据来源 | 图片 |
+|-----|------|----------|------|
+| `manwaxu` | 漫蛙漫画（**默认源**） | manwaxu.cc | AES-256-CBC 加密，CDN 容灾链 `tu.mhttu.cc` → `mwtuwu.cc` → `tu.mwzu.cc` → `mwtusi.cc` |
+| `pixiv` | pixiv | www.pixiv.net | 明文图，固定 host `i.pximg.net`（靠 Referer 防盗链），免登录 |
+
+访问时用 `?src=<key>` 选源；**不带 `src` 一律走默认源 manwaxu**。
 
 ## 技术栈
 
@@ -30,7 +36,7 @@
 - ❌ HTML 响应注入（无防弹窗 JS、无自动阅读 JS、无图片解锁 JS、无广告屏蔽 CSS、无 DOM 沙箱）
 - ❌ 域名引用替换（不把源站域名改写成当前站点域名）
 - ❌ 静态资源代理（无 `/__assets__/` 前缀，不代理 `mwappimgs.cc`）
-- ❌ `targetHost` 字段（数据源就是 `BOOK_SOURCES.baseUrl`）
+- ❌ `targetHost` 字段（数据源就是各源的 `baseUrl`）
 
 ## 目录结构
 
@@ -74,42 +80,69 @@ my-mirror/
 
 ## 各文件职责
 
-### `api/proxy.js`（后端核心，384 行）
+### `api/proxy.js`（后端核心，多书源版）
 
-| 区块 | 行数区间 | 职责 |
-|------|----------|------|
-| `BOOK_SOURCES` 规则表 | 36–116 | 数据源、超时、UA、图片 CDN 链、解密参数、取数规则（含匹配正则） |
-| `ALLOWED_DATA` | 119 | 从 `rules[*].match` 派生的放行清单 |
-| `fetchRaw()` | 126–165 | 带超时（默认取 `BOOK_SOURCES.timeout`）+ 最多 3 次重定向跟随的 GET |
-| `sniffMime()` | 168–183 | 图片魔数嗅探（JPEG/PNG/GIF/WebP/BMP） |
-| `decryptImage()` | 186–208 | 先嗅探魔数，已是明文则原样返回；否则 AES-256-CBC 解密 |
-| `upstreamHeaders()` | 211–218 | 统一上游请求头（Referer / Origin / UA / Accept） |
-| `setCors()` | 220–224 | 设置 CORS 头 |
-| `readFrontend()` | 227–242 | 读取并缓存 `manga_reader.html`（多路径兜底） |
-| `serveFrontend()` | 249–264 | 返回前端界面；读不到则返回带排查提示的 500 |
-| `serveRules()` | 267–271 | `/api/source/rules` 接口，`Cache-Control: public, max-age=300` |
-| `serveData()` | 274–291 | 按规则转发数据请求到 `baseUrl`，`no-store` |
-| `serveImage()` | 294–331 | 按 CDN 链依次重试取图 + 解密；全失败返回 502 + `tried[]` |
-| `handler()` | 336–384 | 入口：路由分发 |
+| 区块 | 职责 |
+|------|------|
+| `SOURCES` 源注册表 | key → 源定义（`baseUrl`/`referer`/`timeout`/`userAgent`/`imageCdn`/`decrypt`/`rules`/`imageRule`/`adapt`/`homeSections`） |
+| `DEFAULT_SOURCE` / `resolveSource()` | `?src=<key>` 选源；**未知或缺省回落默认源**（兼容契约） |
+| `sourceList()` | `/api/sources` 的载荷（只暴露 key/name/version/baseUrl） |
+| `fetchRaw()` | 带超时（取源的 `timeout`）+ 最多 3 次重定向跟随的 GET |
+| `sniffMime()` | 图片魔数嗅探（JPEG/PNG/GIF/WebP/BMP） |
+| `decryptImage(src, buf)` | 先嗅探魔数，已是明文则原样返回；否则按**该源**的 AES 参数解密 |
+| `upstreamHeaders(src, req)` | 统一上游请求头（Referer / Origin / UA / Accept）——pixiv 防盗链靠它 |
+| `setCors()` | 设置 CORS 头 |
+| `readFrontend()` | 读取并缓存 `manga_reader.html`（多路径兜底） |
+| `getByPath()` / `fillPath()` / `extractVars()` | 嵌套取值、路径占位符填充、路径变量抽取 |
+| `buildUpstreamQuery()` | 上游 query 构造：白名单 + `paramMap` 改名 + `paramDefaults` 默认值 |
+| `mapItem()` / `normalizeList()` / `normalizeDetail()` / `normalizeImages()` | 按 `adapt` 声明把上游 JSON 归一化成前端认的结构 |
+| `serveFrontend()` | 返回前端界面；读不到则返回带排查提示的 500 |
+| `serveRules(src, res)` | `/api/source/rules`，返回**单个源对象**（含 `rules`），`max-age=300` |
+| `serveSources(res)` | `/api/sources`，源列表（不含密钥/rules/UA） |
+| `serveData()` | 按规则转发；支持 `multi`（多请求组装）、`__fake_chapters__`（合成单话）、`adapt` 归一化 |
+| `serveImage(src, target)` | 按源 `imageRule.host`（固定）或 `imageCdn`（容灾链）取图 + 可选解密 |
+| `handler()` | 入口：路由分发 |
 
 **入口路由顺序**（`handler`）：
 
 1. `OPTIONS` → 204 + CORS
-2. 计算 `target`：优先查询参数 `p`，否则用裸路径（并剥掉 `/api/proxy` 前缀）
-3. 无 `p` 且 target 为 `/`、`/index.html`、`/manga_reader.html` → `serveFrontend()`
-4. `target === '/api/source/rules'` → `serveRules()`
-5. `imageRule.match`（`/^\/en_images\//`）命中 → `serveImage()`
-6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
-7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
+2. `resolveSource(searchParams.get('src'))` 选定源
+3. 计算 `target`：优先查询参数 `p`，否则用裸路径（并剥掉 `/api/proxy` 前缀）
+4. 无 `p` 且 target 为 `/`、`/index.html`、`/manga_reader.html` → `serveFrontend()`
+5. `target === '/api/source/rules'` → `serveRules()`；`target === '/api/sources'` → `serveSources()`
+6. 该源 `imageRule.match` 命中 → `serveImage()`
+7. 逐个匹配该源 `rules[*].match` → `serveData()`
+8. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，1621 行）
+**上游路径模板占位符**（`fillPath`）：
+
+| 写法 | 取值来源 | 例 |
+|------|----------|-----|
+| `{id}` / `{cid}` | `rule.match` 的正则捕获组（`rule.vars` 写组号） | `/api/comic/{id}` |
+| `{keyword}` | query（`rule.vars` 写 `'query:keyword'`） | `/ajax/search/artworks/{keyword}` |
+
+> pixiv 的搜索词在**路径段**里而非 query，所以必须有路径占位符能力。
+
+**`adapt` 归一化声明**（数据驱动，不是每源写一段代码）：
+
+| 字段 | 作用 |
+|------|------|
+| `listPath` / `searchListPath` / `detailPath` / `imagesPath` / `totalPath` | 上游响应取值路径（支持 `a.b.c`） |
+| `field` | 字段改名映射（`id`/`title`/`pic`/`author`/`tags`/`hits`） |
+| `searchField` | **搜索端点单独一套字段名**（pixiv 的 ranking 用 `illust_id`，search 用 `id`） |
+| `tagsJoin` | tags 数组 → 逗号串（前端要逗号串） |
+| `filterMasked` | 过滤 `is_masked`（需登录，取图必失败） |
+| `fakeChapters` | 无章节源 → 合成单话（同时触发前端单话 UI） |
+
+### `manga_reader.html`（前端，单文件 SPA）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
-1. **书源规则配置**（`BOOK_SOURCES_DEFAULT`）：定义数据来源、API 路径、图片 CDN、解密参数
-2. **API 客户端**：`buildUrl()` / `apiGet()` 按书源规则构建请求 URL 并获取 JSON 数据
-3. **视图渲染**：
-   - 首页（`renderHome`）：热门推荐/最新更新/VIP/古风/玄幻/校园
+1. **书源配置**：`BOOK_SOURCES_DEFAULT` 仅作**拉取失败时的兜底**；权威副本在代理端 `SOURCES` 注册表
+2. **书源选择**：`loadSourceList()` 拉 `/api/sources` → `renderSourceSelect()` 渲染顶栏下拉 → `switchSource(key)` 切换（存 `manga_prefs.srcKey`）；`SRC_KEY` 随每个请求带上
+3. **API 客户端**：`buildUrl()` / `apiGet()` 构建请求 URL（**自动追加 `&src=`**）；`toProxyPath(u, orig)` 把图片绝对地址转成代理路径（**同样追加 `&src=`**，是防多源串图的唯一注入点）
+4. **视图渲染**：
+   - 首页（`renderHome`）：栏目由源的 **`homeSections`** 驱动（manwaxu 六栏 / pixiv 日周月三榜）；**非本源栏目会清空并隐藏**，否则残留上一个源的卡片
    - 分类（`renderCategory` / `loadCategory`）：按类型筛选 + 分页加载
    - 搜索（`renderSearch`）：关键词搜索 + 防抖
    - 详情（`openDetail`）：漫画信息 + 章节列表
@@ -122,10 +155,37 @@ my-mirror/
    - **鼠标交互**（`bindReaderMouseUI` / `toggleZoom` / `clickZoneAt` / `scrollToAdjacentImage` / `openCtxMenu`，Pixiv 竖读模型）：单击 上=上一张切图 中=放大 下=下一张切图（末张则下一话）、右键快捷菜单
    - **返回详情页**（`backToDetail`）：底部栏「← 详情」与 `Esc` 均可返回（对应 Pixiv ③）
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
-   - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
-4. **阅读历史**：`localStorage` 存储最近 20 本阅读记录
-5. **书源规则面板**：`renderRulesPanel()` 展示当前生效的规则（调试用）
-6. **启动流程**：`boot()` → 拉取权威规则 → 渲染首页
+   - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`（**带 `src` 字段**，见下）
+   - **单话源 UI**（`isSingleChapterSource` / `applySingleChapterUI`）：`adapt.fakeChapters && 章节数<=1` 时上下话入口置灰 + 提示「本作品仅 1 话」
+5. **阅读历史**：`localStorage` 存储最近 20 本阅读记录（**带 `src` 字段**，见下）
+6. **书源规则面板**：`renderRulesPanel()` 展示当前生效的规则（调试用；对无 `imageCdn`/`decrypt.enabled=false` 的源有防御）
+7. **启动流程**：`boot()` → `loadReaderPrefs()` → `loadSourceList()` → `loadRules()` → `navigate('home')`
+
+#### 多书源的约定
+
+书源定义集中在代理端 `api/proxy.js` 的 `SOURCES` 注册表。**新增一个源 = 在 `SOURCES` 加一项**，前端无需改动（源列表与首页栏目都由代理端下发）。
+
+**`src` 参数是整套机制的枢纽：**
+
+- 前端 `buildUrl()` 与 `toProxyPath()` **统一追加 `&src=`**，这两个函数是唯一注入点。
+- **图片请求漏带 `src` 会导致「封面正常、正文错乱」** —— 多源下最难排查的一类 bug。
+- `src` 缺省或未知时回落 `DEFAULT_SOURCE`（`manwaxu`）：这是**旧链接、旧缓存、书签继续可用**的唯一保证，改动 `resolveSource()` 时必须保留。
+- `src` 不会透传给上游（`handler` 里从 query 剔除）。
+
+**`/api/source/rules` 必须返回单个源对象**（含 `.rules`）：前端是 `if(j && j.rules)` 判定成功，若改成数组会**静默回落内联默认值且不报错**，极难排查。
+
+**`/api/sources` 只暴露展示字段**（key/name/version/baseUrl），**不得**包含 `decrypt.key`、`rules`、`userAgent`。
+
+**源之间的差异靠 `adapt` 声明吸收**，不要在前端写字段映射：
+
+- 字段名不同 → `adapt.field`；**某端点字段名与其它端点不同 → `adapt.searchField`**
+  （pixiv 的 `/ranking.php` 用 `illust_id`/`user_name`，`/ajax/search` 用 `id`/`userName`；只声明一套会让搜索结果 id/author 全空、点进详情 404 —— 这是线上实测踩到的坑）
+- 无章节的源 → `adapt.fakeChapters`，代理端合成单话，前端据此启用单话 UI
+- 需登录的内容 → `adapt.filterMasked` 过滤 `is_masked`（无 cookie 取图必失败）
+
+**图片规则按源独立**：`imageRule.host`（固定单 host，如 pixiv 的 `i.pximg.net`）或 `imageCdn[]`（容灾链，如 manwaxu）；`decrypt.enabled` 决定是否解密。**跨源的图片路径不匹配对方的 `imageRule.match` 时会 404，这是正确的隔离行为**（pixiv 源下 `/en_images/` 不匹配）。
+
+**历史与阅读位置按源隔离**：`manga_history` / `manga_pos` 的记录带 `src` 字段，`recSrc(rec)` 缺省回落默认源（兼容无 `src` 的旧记录）。`comicId` 是**源相关**的（manwaxu 的 `94789` 与 pixiv 的 `94789` 是不同作品），不加隔离会导致切源后历史点进去 404、位置错乱恢复。
 
 #### 连续阅读模式的关键约定
 
@@ -265,9 +325,10 @@ Pixiv 官方原文（pixiv.help）：
 | 逻辑层 | 所在文件 | 职责 | 变更频率 |
 |--------|----------|------|----------|
 | 前端 UI | `manga_reader.html` | 页面渲染、用户交互、状态管理 | 中（UI 调整/新功能） |
-| 书源规则配置 | `manga_reader.html` + `api/proxy.js` | 定义数据来源、API 路径、图片 CDN | 低（换源时才改） |
+| 书源注册表 | `api/proxy.js`（`SOURCES`） | 定义数据来源、API 路径、图片 CDN、字段归一化 | 低（加源时才改） |
 | 代理路由 | `api/proxy.js` | 请求路由、头处理、响应变换 | 低 |
-| 图片处理 | `api/proxy.js` | CDN 容灾 + AES 解密 + 图片代理 | 低（算法稳定） |
+| 字段归一化 | `api/proxy.js`（`adapt` 相关） | 把上游 JSON 转成前端认的结构 | 低（换源时按需加声明） |
+| 图片处理 | `api/proxy.js` | CDN 容灾 / 固定 host + 可选 AES 解密 | 低（算法稳定） |
 | 部署配置 | `vercel.json` | 路由规则、函数配置 | 极低 |
 
 **分层决策验证（四个问题）：**
@@ -285,12 +346,14 @@ Pixiv 官方原文（pixiv.help）：
 ## 变更规则
 
 1. 改 UI/交互 → 只动 `manga_reader.html`
-2. 换数据来源/加新书源 → 改 `manga_reader.html` 的 `BOOK_SOURCES_DEFAULT` + `api/proxy.js` 的 `BOOK_SOURCES`（两处必须一致）
-3. 改 CDN/解密 → 改 `api/proxy.js` 的 `imageCdn` / `decrypt` + `manga_reader.html` 的同步配置
+2. **加新书源 → 只改 `api/proxy.js` 的 `SOURCES` 注册表**（加一项），前端无需改动；若新源的 JSON 字段与现有源不同，用该源的 `adapt` 声明吸收，**不要在前端写映射**
+3. 改某源的 CDN/解密 → 改该源定义里的 `imageCdn` / `decrypt` / `imageRule`（按源独立，不影响其它源）
 4. 改部署配置 → 只改 `vercel.json`
 5. **不允许**在 `manga_reader.html` 里写网络代理逻辑（反向也不行）
 6. **不允许**在 `api/proxy.js` 里写前端 UI 渲染逻辑
 7. 改完文档描述的行为时，同步更新本文件与 `docs/architecture.md`
+
+> 改 `src` 相关逻辑（`resolveSource` / `buildUrl` / `toProxyPath` / `/api/source/rules` 的返回形状）前，先读「多书源的约定」一节——那里列的每一条都是踩过的坑。
 
 ## 每次让 AI 改动的标准指令模板
 
@@ -334,6 +397,10 @@ Pixiv 官方原文（pixiv.help）：
 - 不在 `api/proxy.js` 里写前端 UI 渲染
 - 不修改未列出的文件
 - 不删除已有 API 路径而不提供兼容层
+- **不破坏 `src` 缺省回落默认源**（旧链接/旧缓存/书签全靠它）
+- **不把 `/api/source/rules` 改成返回数组**（前端会静默回落内联默认值，不报错）
+- **不在 `/api/sources` 里暴露 `decrypt.key` / `rules` / `userAgent`**
+- **不在图片请求里漏带 `src`**（会「封面正常、正文错乱」）
 - 不把 `api/proxy.js` 改成 Edge Runtime（它依赖 fs/path/http/https/crypto）
 - 不在代理层做重计算（Serverless 函数有内存和时间限制）
 - 不跨层乱改（前端不改代理逻辑，代理不改前端 UI）
@@ -370,17 +437,20 @@ Pixiv 官方原文（pixiv.help）：
 }
 ```
 
-### 书源规则配置（`BOOK_SOURCES` / `BOOK_SOURCES_DEFAULT`）
+### 书源定义（`SOURCES[key]`）
+
+代理端 `SOURCES` 是**权威**；前端 `BOOK_SOURCES_DEFAULT` 只是拉取失败时的兜底。
 
 ```
 {
+  key: string,          // 源标识，前端用它作 ?src= 的值
   name: string,
   version: string,
-  baseUrl: string,      // 数据源站点（实际值：https://manwaxu.cc）
+  baseUrl: string,      // 数据源站点
   referer: string,
-  timeout: number,      // 仅代理端
-  userAgent: string,    // 仅代理端
-  imageCdn: string[],   // 备用 CDN 域名列表（按优先级）
+  timeout: number,
+  userAgent: string,
+  imageCdn: string[],   // 备用 CDN 域名列表（按优先级）；固定单 host 的源留空
   decrypt: {
     enabled: boolean,
     algo: string,       // 'aes-256-cbc'
@@ -389,14 +459,38 @@ Pixiv 官方原文（pixiv.help）：
     ivBytes: number     // 16
   },
   rules: {
-    home: { desc, path, params[], match },       // match 仅代理端
+    // match 正则匹配前端路径；path 是上游模板（支持 {id}/{cid}/{keyword}）
+    // vars 声明路径变量来源（组号 或 'query:名字'）
+    // params 白名单 / paramMap 改名 / paramDefaults 默认值 / multi 多请求组装
+    home: { desc, path, params[], match, vars?, paramMap?, paramDefaults?, multi? },
     search: { ... },
     detail: { ... },
-    chapters: { ... },
+    chapters: { ... },   // 无章节源用哨兵 path '__fake_chapters__'
     chapInfo: { ... },
     images: { ... },
     announce: { ... }
   },
-  imageRule: { desc, match, cdn, decrypt }
+  imageRule: {
+    desc, match,         // 图片路径正则（按源独立）
+    cdn: boolean,        // true → 走 imageCdn 容灾链
+    host?: string,       // 或固定单 host（如 https://i.pximg.net）
+    decrypt: boolean
+  },
+  adapt: {               // 可选：字段归一化声明（上游结构≠前端结构时必填）
+    listPath, searchListPath, detailPath, imagesPath, totalPath,
+    field: { id, title, pic, author, tags, hits },
+    searchField: { ... }, // 搜索端点单独一套字段名
+    tagsJoin: boolean,
+    filterMasked: boolean,
+    fakeChapters: boolean
+  },
+  homeSections: [ { grid, title, key } ]   // 首页栏目；key 指向上游响应里的列表字段
 }
 ```
+
+**已注册的源：**
+
+| key | 名称 | 特点 |
+|-----|------|------|
+| `manwaxu` | 漫蛙漫画（默认） | AES-256-CBC 加密图 + 4 域名 CDN 容灾链；6 个首页栏目；多话 |
+| `pixiv` | pixiv | 明文图 + 固定 host `i.pximg.net`（靠 Referer 防盗链）；日/周/月三榜；免登录；**单话**（`adapt.fakeChapters`） |
