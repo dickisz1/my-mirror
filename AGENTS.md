@@ -102,7 +102,7 @@ my-mirror/
 6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
 7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，1412 行）
+### `manga_reader.html`（前端，1609 行）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
@@ -118,6 +118,7 @@ my-mirror/
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
    - **双栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `hideHeaderBar`）：上栏站点导航吸顶、下栏操作栏吸底，鼠标靠近哪边唤出哪边，各 2 秒淡出
    - **自动滚动**（`toggleAutoScroll` / `setAutoSpeed` / `autoScrollTick`）：速度滑杆 10–300 px/s，滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
+   - **鼠标交互**（`bindReaderMouseUI` / `toggleZoom` / `navZoneAt` / `openCtxMenu`，参考 Pixiv）：双击图片放大、单击左/右区域翻话、右键快捷菜单
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
    - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
 4. **阅读历史**：`localStorage` 存储最近 20 本阅读记录
@@ -158,6 +159,27 @@ my-mirror/
 - 中断：`wheel` / `touchstart` / 键盘（输入框与滑杆聚焦时除外）→ 立即 `stopAutoScroll()`。自动滚动自身走 `window.scrollTo`，不触发这些事件，不会自我中断。
 - 速度滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
 - 离开阅读器（`navigate` 非 reader 分支）调用 `stopAutoScroll()`。
+
+#### 鼠标交互的约定（参考 Pixiv）
+
+Pixiv 官方操作：点屏幕**左/右**翻页、点**中央**放大/复原、鼠标移到**上下边缘**出工具栏。我们是竖向连续滚动，映射如下：
+
+| 操作 | 行为 | 实现 |
+|---|---|---|
+| 双击图片 | 放大（`position:fixed;inset:0` 铺满视口）；再双击 / 单击 / Esc 复原 | `toggleZoom` / `unzoomImage` |
+| 单击**左 1/3** | 上一话 | `navZoneAt` 返回 `'prev'` |
+| 单击**右 1/3** | 下一话 | `navZoneAt` 返回 `'next'` |
+| 单击**中央 1/3** | 不翻话（避免与"双击放大"误触） | `navZoneAt` 返回 `null` |
+| 右键 | 快捷菜单：上一话/下一话/章节列表/自动滚动/阅读设置/复制图片链接 | `openCtxMenu` |
+| Esc | 优先级：关右键菜单 → 复原放大 → 关章节浮层 | `keydown` 开头 |
+
+**必须注意的冲突**：双击会先触发两次 `click`，所以单击翻话走 **`NAV_DELAY`(250ms) 延时判定**，`dblclick` 里调 `cancelNav()` 取消待判定的单击。**不要改成"单击立即翻话"**，否则双击放大时会先跳一话。
+
+- `navZoneAt` 以**当前视口最靠上的 `.imgwrap`** 的水平范围划分左/中/右三区。循环里要记**元素本身**而非 `getBoundingClientRect()` 的返回值（曾因此报 `target.getBoundingClientRect is not a function`，单击翻话完全失效）。
+- 放大态下单击 = 复原（不翻话）；`unzoomImage` 恢复放大前的 `scrollY`。
+- 右键菜单在**点击别处 / 滚动 / Esc / 离开阅读器**时关闭；`resetReaderMouseUI()` 在离开阅读器时统一复位。
+- 事件只绑一次（`MOUSE_UI.bound`），绑在 `#readerArea` 上，避免与顶栏/面板按钮冲突。
+- 未加载的图片（无 `src`）不提供"复制图片链接"项。
 
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 

@@ -372,6 +372,8 @@ autoScrollTick(ts) 每帧：
 13. **双栏自动隐藏参数**：`READER_TOPBAR.REVEAL_ZONE`(80px，顶部/底部共用) 与 `HIDE_DELAY`(2000ms)；上栏隐藏类 `header.bar-hidden`、下栏 `.reader-top.hidden`，改动时须同步 `stickyOffset()` 的留白计算
 14. **自动滚动的时间基准**：`dt` 必须按 `AUTOSCROLL.MAX_FRAME_MS`(100ms) 限幅，且首帧只建立基准不移动；判断"最后一话"用 `chapIdx` 而非 `viewChapIdx`
 15. **自动滚动速度**：`state.autoSpeed`（10–300 px/s）存 `manga_prefs.autoSpeed`；键盘中断检查必须在 `INPUT`/`TEXTAREA` 判断之后，否则调速度会停掉滚动
+16. **单击翻话的延时判定**：`MOUSE_UI.NAV_DELAY`(250ms) 是双击/单击共存的必要条件，`dblclick` 必须调 `cancelNav()`；改成单击立即翻话会让双击放大先跳一话
+17. **鼠标交互的键位**：`#readerArea` 上的 `dblclick` / `click` / `contextmenu` 三个监听只绑一次（`MOUSE_UI.bound`）；`navZoneAt` 必须记元素而非 rect
 
 ## 风险清单
 

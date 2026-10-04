@@ -129,6 +129,16 @@ body.reader-wide .container{max-width:none;padding:0}
 /* 阅读器轻提示 */
 .reader-toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,12px);background:rgba(0,0,0,.82);color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:300;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
 .reader-toast.on{opacity:1;transform:translate(-50%,0)}
+/* 双击放大：图片铺满视口、可滚动查看细节 */
+.imgwrap.zoomed{position:fixed;inset:0;z-index:250;background:rgba(0,0,0,.97);margin:0;border-radius:0;overflow:auto;cursor:zoom-out;min-height:0}
+.imgwrap.zoomed img{width:auto;max-width:100%;height:auto;margin:0 auto;display:block;object-fit:contain;background:transparent}
+body.zoomed{overflow:hidden}
+/* 右键快捷菜单 */
+.ctxmenu{position:fixed;z-index:400;background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:4px 0;min-width:172px;display:none;box-shadow:0 8px 28px rgba(0,0,0,.55)}
+.ctxmenu.on{display:block}
+.ctx-item{padding:8px 14px;font-size:13px;color:var(--mut);cursor:pointer;white-space:nowrap}
+.ctx-item:hover{background:var(--accent);color:#fff}
+.ctx-sep{height:1px;background:var(--ln);margin:4px 0}
 </style></head><body>
 
 <header>
@@ -229,7 +239,7 @@ body.reader-wide .container{max-width:none;padding:0}
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格/PageDown 翻屏 | ↑↓/Home/End 顶部底部 | J/K 上下话</div>
+    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格 翻屏 | J/K 上下话 | 鼠标: 双击放大 · 单击左/右翻话 · 右键菜单</div>
   </div>
 </div>
 
@@ -241,6 +251,9 @@ body.reader-wide .container{max-width:none;padding:0}
     <div class="list" id="jumpList"></div>
   </div>
 </div>
+
+<!-- 右键快捷菜单（阅读器内） -->
+<div class="ctxmenu" id="ctxMenu"></div>
 
 <footer>
   数据来源: <span id="footSrc">manwaxu.cc</span> · 全部请求经 /api/proxy 按书源规则转发 · 仅本地记录阅读进度
@@ -391,8 +404,8 @@ function navigate(view){
   if(view==='category') renderCategory();
   if(view==='search') renderSearch();
   // 阅读器顶栏自动隐藏：进入时启用，离开时复位
-  if(view === 'reader') enterReaderTopbar();
-  else if(prev === 'reader'){ leaveReaderTopbar(); stopAutoScroll(); }
+  if(view === 'reader'){ enterReaderTopbar(); bindReaderMouseUI(); }
+  else if(prev === 'reader'){ leaveReaderTopbar(); stopAutoScroll(); resetReaderMouseUI(); }
 }
 
 /* ============================================================
@@ -1179,7 +1192,183 @@ function showReaderToast(msg){
 }
 
 /* ============================================================
- * 十二、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
+ * 十二、鼠标左键/右键交互（参考 Pixiv）
+ *   双击图片 → 放大/复原；单击左/右区域 → 上一话/下一话；右键 → 快捷菜单
+ *   纯前端，不涉及代理层
+ * ============================================================ */
+const MOUSE_UI = {
+  NAV_DELAY: 250,    // 单击等待时长（等不到第二次点击才判定为单击）
+  navTimer: null,    // 单击延时定时器
+  zoomed: null,      // 当前放大的 .imgwrap
+  zoomOrigin: 0,     // 放大前滚动位置
+  bound: false       // 事件是否已绑定
+};
+
+/* ---------- 双击放大 / 复原 ---------- */
+function isZoomed(){ return !!MOUSE_UI.zoomed; }
+
+function toggleZoom(wrap){
+  if(!wrap || wrap.classList.contains('failed')) return;
+  if(isZoomed()){ unzoomImage(); return; }
+  MOUSE_UI.zoomOrigin = window.scrollY;
+  MOUSE_UI.zoomed = wrap;
+  wrap.classList.add('zoomed');
+  document.body.classList.add('zoomed');
+}
+function unzoomImage(){
+  const w = MOUSE_UI.zoomed;
+  if(!w) return;
+  w.classList.remove('zoomed');
+  document.body.classList.remove('zoomed');
+  MOUSE_UI.zoomed = null;
+  window.scrollTo(0, MOUSE_UI.zoomOrigin);
+}
+
+/* ---------- 单击左/右区域翻话 ---------- */
+/** 取视口中心的 .imgwrap 作为参考，判断点击落在左区还是右区 */
+function navZoneAt(clientX){
+  const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
+  if(!figs.length) return null;
+  // 找当前视口里最靠上的那张图，用它作为"页面"的水平边界
+  let target = null, best = Infinity;
+  for(const f of figs){
+    const r = f.getBoundingClientRect();
+    if(r.bottom <= 0) continue;
+    if(r.top < best){ best = r.top; target = f; }   // 记元素本身（不是 rect）
+  }
+  if(!target) target = figs[figs.length - 1];
+  const r = target.getBoundingClientRect();
+  const third = r.width / 3;
+  if(clientX < r.left + third) return 'prev';
+  if(clientX > r.right - third) return 'next';
+  return null;   // 中间区域不翻话（与 Pixiv 中央=放大的语义错开，避免误触）
+}
+function navByZone(zone){
+  if(zone === 'prev'){
+    if(state.viewChapIdx > 0){ showReaderToast('上一话'); prevChapter(); }
+    else showReaderToast('已是第一话');
+  }else if(zone === 'next'){
+    if(state.viewChapIdx < state.chapters.length - 1){ showReaderToast('下一话'); nextChapter(); }
+    else showReaderToast('已是最后一话');
+  }
+}
+function scheduleNav(zone){
+  cancelNav();
+  MOUSE_UI.navTimer = setTimeout(()=>{
+    MOUSE_UI.navTimer = null;
+    if(state.view === 'reader') navByZone(zone);
+  }, MOUSE_UI.NAV_DELAY);
+}
+function cancelNav(){
+  if(MOUSE_UI.navTimer){ clearTimeout(MOUSE_UI.navTimer); MOUSE_UI.navTimer = null; }
+}
+
+/* ---------- 右键快捷菜单 ---------- */
+function openCtxMenu(x, y, wrap){
+  const menu = document.getElementById('ctxMenu');
+  if(!menu) return;
+  const last = state.viewChapIdx >= state.chapters.length - 1;
+  const first = state.viewChapIdx <= 0;
+  const imgUrl = wrap ? (wrap.querySelector('.cimg') && wrap.querySelector('.cimg').getAttribute('src')) : null;
+  menu.innerHTML =
+    '<div class="ctx-item" data-act="prev"' + (first ? ' style="opacity:.4"' : '') + '>⏮ 上一话</div>' +
+    '<div class="ctx-item" data-act="next"' + (last ? ' style="opacity:.4"' : '') + '>⏭ 下一话</div>' +
+    '<div class="ctx-sep"></div>' +
+    '<div class="ctx-item" data-act="jump">📖 章节列表</div>' +
+    '<div class="ctx-item" data-act="auto">' + (isAutoScrolling() ? '⏸ 停止自动滚动' : '▶ 自动滚动') + '</div>' +
+    '<div class="ctx-item" data-act="settings">🎨 阅读设置</div>' +
+    (imgUrl ? '<div class="ctx-sep"></div><div class="ctx-item" data-act="copyimg">🔗 复制图片链接</div>' : '');
+  menu.classList.add('on');
+  // 定位（避免超出视口）
+  const mw = menu.offsetWidth || 180, mh = menu.offsetHeight || 200;
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - mw - 4)) + 'px';
+  menu.style.top  = Math.max(4, Math.min(y, window.innerHeight - mh - 4)) + 'px';
+}
+function closeCtxMenu(){
+  const menu = document.getElementById('ctxMenu');
+  if(menu) menu.classList.remove('on');
+}
+function onCtxMenuClick(e){
+  const item = e.target.closest ? e.target.closest('.ctx-item') : null;
+  if(!item) return;
+  const act = item.getAttribute('data-act');
+  closeCtxMenu();
+  if(act === 'prev'){ if(state.viewChapIdx > 0) prevChapter(); }
+  else if(act === 'next'){ if(state.viewChapIdx < state.chapters.length - 1) nextChapter(); }
+  else if(act === 'jump'){ openJumpPanel(); }
+  else if(act === 'auto'){ toggleAutoScroll(); }
+  else if(act === 'settings'){ const p = document.getElementById('readerTools'); if(p && !p.classList.contains('on')) toggleReaderTools(); else if(p) toggleReaderTools(); }
+  else if(act === 'copyimg'){ copyCurrentImage(); }
+}
+function copyCurrentImage(){
+  const im = document.querySelector('#readerArea .cimg[src]');
+  if(!im) return;
+  const url = im.getAttribute('src');
+  const done = ()=> showReaderToast('已复制图片链接');
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(done, ()=>{ showReaderToast('复制失败'); }); return; }
+  }catch(e){}
+  // 兜底：临时 textarea
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = url; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove(); done();
+  }catch(e){ showReaderToast('复制失败'); }
+}
+
+/* ---------- 离开阅读器时复位鼠标交互状态 ---------- */
+function resetReaderMouseUI(){
+  cancelNav();
+  closeCtxMenu();
+  if(isZoomed()) unzoomImage();
+}
+
+/* ---------- 事件接线（只绑一次） ---------- */
+function bindReaderMouseUI(){
+  if(MOUSE_UI.bound) return;
+  MOUSE_UI.bound = true;
+  const area = document.getElementById('readerArea');
+  if(!area) return;
+
+  // 双击图片 → 放大/复原；双击空白处 → 复原
+  area.addEventListener('dblclick', e=>{
+    if(state.view !== 'reader') return;
+    cancelNav();                                   // 双击时取消待判定的单击
+    const wrap = e.target.closest ? e.target.closest('.imgwrap') : null;
+    if(isZoomed()){ unzoomImage(); return; }
+    if(wrap) toggleZoom(wrap);
+  });
+
+  // 单击左/右区域 → 上一话/下一话（延时判定，避开双击）
+  area.addEventListener('click', e=>{
+    if(state.view !== 'reader') return;
+    if(isZoomed()){ unzoomImage(); return; }       // 放大态下单击 = 复原
+    if(e.button !== 0) return;
+    const zone = navZoneAt(e.clientX);
+    if(zone) scheduleNav(zone);
+  });
+
+  // 右键 → 快捷菜单
+  area.addEventListener('contextmenu', e=>{
+    if(state.view !== 'reader') return;
+    e.preventDefault();
+    cancelNav();
+    const wrap = e.target.closest ? e.target.closest('.imgwrap') : null;
+    openCtxMenu(e.clientX, e.clientY, wrap);
+  });
+
+  // 点击菜单项 / 点击别处 / Esc / 滚动 → 关闭菜单
+  const menu = document.getElementById('ctxMenu');
+  if(menu) menu.addEventListener('click', onCtxMenuClick);
+  document.addEventListener('click', e=>{
+    const m = document.getElementById('ctxMenu');
+    if(m && m.classList.contains('on') && !(e.target.closest && e.target.closest('.ctxmenu'))) closeCtxMenu();
+  });
+  window.addEventListener('scroll', closeCtxMenu, {passive:true});
+}
+
+/* ============================================================
+ * 十三、阅读器显示设置（图片宽度 / 亮度）+ 章节快速跳转
  * 纯前端：设置存 localStorage，不涉及代理层
  * ============================================================ */
 
@@ -1295,7 +1484,7 @@ function jumpToChapter(i){
 }
 
 /* ============================================================
- * 十三、书源规则面板（让"规则驱动"可见）
+ * 十四、书源规则面板（让"规则驱动"可见）
  * ============================================================ */
 function toggleRules(){
   const p = document.getElementById('rulesPanel');
@@ -1319,7 +1508,7 @@ function renderRulesPanel(){
 }
 
 /* ============================================================
- * 十四、本地阅读进度
+ * 十五、本地阅读进度
  * ============================================================ */
 function saveHistory(){
   if(!state.comic) return;
@@ -1343,13 +1532,21 @@ function renderHistory(){
 }
 
 /* ============================================================
- * 十五、工具
+ * 十六、工具
  * ============================================================ */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ n = Number(n)||0; return n >= 10000 ? (n/10000).toFixed(1)+'万' : String(n); }
 function goTop(){ window.scrollTo({top:0,behavior:'smooth'}); }
 
 document.addEventListener('keydown', e=>{
+  // 右键菜单打开时：Esc 关闭，其他按键拦截
+  const cm = document.getElementById('ctxMenu');
+  if(cm && cm.classList.contains('on')){
+    if(e.key === 'Escape'){ closeCtxMenu(); e.preventDefault(); }
+    return;
+  }
+  // 图片放大态：Esc 复原
+  if(e.key === 'Escape' && isZoomed()){ unzoomImage(); e.preventDefault(); return; }
   // 跳转浮层：Esc 关闭（优先于阅读器快捷键，浮层打开时拦截其他按键）
   const ov = document.getElementById('jumpOverlay');
   if(ov && ov.classList.contains('on')){
@@ -1396,7 +1593,7 @@ document.addEventListener('keydown', e=>{
 });
 
 /* ============================================================
- * 十六、启动：先拉书源规则，再按规则取首页数据
+ * 十七、启动：先拉书源规则，再按规则取首页数据
  * ============================================================ */
 (async function boot(){
   loadReaderPrefs();     // 先应用显示设置（宽度/亮度/速度），再渲染
