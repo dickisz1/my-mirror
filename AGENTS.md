@@ -102,7 +102,7 @@ my-mirror/
 6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
 7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，1609 行）
+### `manga_reader.html`（前端，1621 行）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
@@ -118,7 +118,8 @@ my-mirror/
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
    - **双栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `hideHeaderBar`）：上栏站点导航吸顶、下栏操作栏吸底，鼠标靠近哪边唤出哪边，各 2 秒淡出
    - **自动滚动**（`toggleAutoScroll` / `setAutoSpeed` / `autoScrollTick`）：速度滑杆 10–300 px/s，滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
-   - **鼠标交互**（`bindReaderMouseUI` / `toggleZoom` / `navZoneAt` / `openCtxMenu`，参考 Pixiv）：双击图片放大、单击左/右区域翻话、右键快捷菜单
+   - **鼠标交互**（`bindReaderMouseUI` / `toggleZoom` / `clickZoneAt` / `scrollToAdjacentImage` / `openCtxMenu`，Pixiv 竖读模型）：单击 上=上一张切图 中=放大 下=下一张切图（末张则下一话）、右键快捷菜单
+   - **返回详情页**（`backToDetail`）：底部栏「← 详情」与 `Esc` 均可返回（对应 Pixiv ③）
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
    - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
 4. **阅读历史**：`localStorage` 存储最近 20 本阅读记录
@@ -160,26 +161,41 @@ my-mirror/
 - 速度滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
 - 离开阅读器（`navigate` 非 reader 分支）调用 `stopAutoScroll()`。
 
-#### 鼠标交互的约定（参考 Pixiv）
+#### 鼠标交互的约定（Pixiv 竖读模型）
 
-Pixiv 官方操作：点屏幕**左/右**翻页、点**中央**放大/复原、鼠标移到**上下边缘**出工具栏。我们是竖向连续滚动，映射如下：
+Pixiv 官方原文（pixiv.help）：
+- **① 前后页**：点屏幕**左右**翻页；**「縦読み」（竖读）模式则点「上下」区域**。
+- **② 放大缩小**：点屏幕**中央** → 放大，**再点一次** → 复原（是**单击**，不是双击）。
+- **③ 关闭**：关闭阅读器回到作品详情页。
+- **⑤ 页码滑块**：拖动 ● 跳页。**⑥ 阅读方向切换**。
+- 快捷键：`J/↓` 下一页、`K/↑` 上一页、`V` 原始尺寸、`Z` 缩略图、`L` 喜欢、`B` 收藏、`esc` 关闭。
+
+**本项目是条漫（webtoon）竖向滚动**，一话 = 一长条故事被切成多张短图连贯拼接，所以按竖读模型映射：
 
 | 操作 | 行为 | 实现 |
 |---|---|---|
-| 双击图片 | 放大（`position:fixed;inset:0` 铺满视口）；再双击 / 单击 / Esc 复原 | `toggleZoom` / `unzoomImage` |
-| 单击**左 1/3** | 上一话 | `navZoneAt` 返回 `'prev'` |
-| 单击**右 1/3** | 下一话 | `navZoneAt` 返回 `'next'` |
-| 单击**中央 1/3** | 不翻话（避免与"双击放大"误触） | `navZoneAt` 返回 `null` |
+| 单击**上 1/3** | **上一张切图**；已在本章第一张则上一话 | `clickZoneAt` → `{zone:'prev'}` → `scrollToAdjacentImage(-1)` |
+| 单击**中央 1/3** | 放大切换（再单击复原） | `{zone:'center'}` → `toggleZoom` |
+| 单击**下 1/3** | **下一张切图**；已在本章最后一张则下一话 | `{zone:'next'}` → `scrollToAdjacentImage(1)` |
+| 放大态下任意单击 | 只复原，不执行分区动作 | click 处理器优先 `isZoomed()` 分支 |
 | 右键 | 快捷菜单：上一话/下一话/章节列表/自动滚动/阅读设置/复制图片链接 | `openCtxMenu` |
-| Esc | 优先级：关右键菜单 → 复原放大 → 关章节浮层 | `keydown` 开头 |
+| `V` | 切换原始尺寸 / 适应宽度 | `setImgWidth` |
+| `Esc` | 优先级：关右键菜单 → 复原放大 → 关章节浮层 → **返回详情页** | `keydown` 开头 + `backToDetail` |
+| 底部栏「← 详情」 | 返回详情页（对应 Pixiv ③） | `backToDetail` |
 
-**必须注意的冲突**：双击会先触发两次 `click`，所以单击翻话走 **`NAV_DELAY`(250ms) 延时判定**，`dblclick` 里调 `cancelNav()` 取消待判定的单击。**不要改成"单击立即翻话"**，否则双击放大时会先跳一话。
+**关键区分**：「下一张切图」≠「下一话」。切图是同一话内的分段（`scrollToAdjacentImage` 只滚动），只有越过本章首/末张才调用 `navByZone` 切话。
 
-- `navZoneAt` 以**当前视口最靠上的 `.imgwrap`** 的水平范围划分左/中/右三区。循环里要记**元素本身**而非 `getBoundingClientRect()` 的返回值（曾因此报 `target.getBoundingClientRect is not a function`，单击翻话完全失效）。
-- 放大态下单击 = 复原（不翻话）；`unzoomImage` 恢复放大前的 `scrollY`。
-- 右键菜单在**点击别处 / 滚动 / Esc / 离开阅读器**时关闭；`resetReaderMouseUI()` 在离开阅读器时统一复位。
-- 事件只绑一次（`MOUSE_UI.bound`），绑在 `#readerArea` 上，避免与顶栏/面板按钮冲突。
+**设计教训（不要走回头路）**：
+1. 曾用"单击左右翻话 + **双击**放大"，靠 `NAV_DELAY` 延时判定区分。实测证明该组合有根本缺陷——延时 <500ms（浏览器双击阈值）时稍慢的双击会**先翻话再放大**；延时 ≥500ms 则每次单击都要等半秒。**Pixiv 用"中央单击切换放大"从设计上消除冲突**，不要改回双击。
+2. 分区必须按**视口高度**三等分，**不能按图片高度**——条漫长图会让分区边界落到屏幕外，产生大片"点了没反应"的死区。
+3. `clickZoneAt` 循环里要记**元素本身**而非 `getBoundingClientRect()` 的返回值（曾因此报 `target.getBoundingClientRect is not a function`，翻页完全失效）。
+
+- `scrollToAdjacentImage` 会同步写 `state.viewPos`，保证连点能连续推进；`state.viewPos` 由滚动监听（`updateProgressUI`）持续更新。
+- 放大态下 `unzoomImage` 会恢复放大前的 `scrollY`。
+- 右键菜单在**点击别处 / 滚动 / Esc / 离开阅读器**时关闭；`resetReaderMouseUI()` 统一复位。
+- 事件只绑一次（`MOUSE_UI.bound`），绑在 `#readerArea` 上，避免与双栏/面板按钮冲突。
 - 未加载的图片（无 `src`）不提供"复制图片链接"项。
+- **未实现（有意放弃）**：`Z` 缩略图预览、`L` 喜欢、`B` 收藏、⑥ 阅读方向切换（我们是竖向滚动，无左右读概念）；源站也没有点赞/收藏数据。
 
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
