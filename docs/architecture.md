@@ -158,7 +158,7 @@ preloadNextChapter():
    ├── 追加 <figure class="imgwrap"> 到 #readerArea 末尾
    ├── ensureSentinel() 把哨兵移回末尾
    ├── 图片追加进 state.flatImgs，并 observer.observe() 新图片
-   └── state.chapIdx 前移，顶栏 meta 更新为当前话
+   └── state.chapIdx 前移，下栏 meta 更新为当前话
    │
    ▼
 用户继续下滑 → 哨兵再次进入视口 → 自动加载再下一话（循环直到最后一话）
@@ -199,33 +199,40 @@ saveReaderPrefs() → localStorage.manga_prefs {imgWidth, widthPct, brightness}
 Esc 或点 ✕ → closeJumpPanel()
 ```
 
-### 阅读器顶栏自动隐藏的数据流
+### 阅读器双栏自动隐藏的数据流
 
 ```
 进入阅读器 navigate('reader') → enterReaderTopbar()
    │
    ├── bindTopbarAutoHide()：绑定 document mousemove / mouseleave + window blur（只绑一次）
-   ├── showTopbar()：移除 .reader-top.hidden
-   └── scheduleTopbarHide()：2 秒后 hideTopbar()
+   ├── 上栏：showHeaderBar() + scheduleHeaderHide()   → 2 秒后 hideHeaderBar()
+   └── 下栏：showTopbar()    + scheduleTopbarHide()   → 2 秒后 hideTopbar()
    │
    ▼
-鼠标移动 onReaderMouseMove(e)（仅 state.view === 'reader' 生效）
-   ├── e.clientY <= 80  → clearTimeout + showTopbar()
-   └── 否则若顶栏可见 → scheduleTopbarHide()（2 秒后 hideTopbar）
+鼠标移动 onReaderMouseMove(e)（仅 state.view === 'reader' 生效，两栏独立判断）
+   │
+   ├── 上栏（吸顶）：e.clientY <= 80
+   │     ├── 是 → cancelHeaderHide() + showHeaderBar()
+   │     └── 否且上栏可见 → scheduleHeaderHide()
+   │
+   └── 下栏（吸底）：window.innerHeight - e.clientY <= 80
+         ├── 是 → cancelTopbarHide() + showTopbar()
+         └── 否且下栏可见 → scheduleTopbarHide()
    │
    ▼
-hideTopbar()
-   ├── 若顶栏 :hover（鼠标还停在上面）→ 跳过，不隐藏
-   ├── 收起 #readerTools 与 #rulesPanel（避免悬空）
-   └── 加 .reader-top.hidden（translateY(-100%) + opacity:0 + pointer-events:none）
+hideHeaderBar() / hideTopbar()
+   ├── 若自身 :hover（鼠标还停在上面）→ 跳过，不隐藏
+   ├── hideTopbar() 额外：面板打开时跳过（面板吸附在下栏上方，否则会被一起吃掉）
+   └── 加隐藏类：header.bar-hidden（上滑）/ .reader-top.hidden（下滑）
    │
    ▼
-mouseleave / window blur → 立即隐藏（不等 2 秒）
+mouseleave / window blur → 两栏都立即隐藏（不等 2 秒）
 
-离开阅读器 navigate(非 reader) → leaveReaderTopbar() → 复位为显示
+离开阅读器 navigate(非 reader) → leaveReaderTopbar() → 两栏复位显示 + 关面板 + 移除 body.in-reader
 ```
 
-> 注意：`.reader-top` 的 `z-index` 必须高于站点 `header`（100），否则滚动吸顶后顶栏被 header 盖住，表现为"往下翻就不见了"——这是曾经的 bug。
+> 两栏定位：上栏 `position:sticky; top:0`（z-index 100），下栏 `position:fixed; bottom:0`（z-index 200）。
+> 下栏曾用 `sticky; top:0`，与上栏同时吸顶导致被盖住（表现为"往下翻就不见了"）；改为吸底后不再冲突。
 
 ### 自动滚动的数据流
 
@@ -238,7 +245,7 @@ mouseleave / window blur → 立即隐藏（不等 2 秒）
          ├── 若已在最底部且无话可加载 → 提示「已是最后一话」并返回
          ├── AUTOSCROLL.running = true；last=0；stuckSince=0
          ├── updateAutoScrollBtn()：按钮变「⏸ 停止」
-         ├── scheduleTopbarHide()：顶栏让位
+         ├── scheduleTopbarHide()：下栏让位
          └── requestAnimationFrame(autoScrollTick)
    │
    ▼
@@ -361,8 +368,8 @@ autoScrollTick(ts) 每帧：
 9. **两个话号的语义**：`chapIdx` = 最后已加载话（驱动预加载），`viewChapIdx` = 视口所在话（显示/历史/跳转高亮）。不可混用
 10. **宽度模式与限宽**：`custom`/`orig` 依赖 `body.reader-wide` 解除 `.container` 的 1200px 限宽；改动 `.container` 样式时须一并检查
 11. **localStorage 键**：`manga_history`（历史）、`manga_pos`（话内位置）、`manga_prefs`（显示设置）三者独立，改名会导致用户数据丢失
-12. **顶栏层级**：`.reader-top` 的 `z-index` 必须 > 站点 `header` 的 100，否则滚动吸顶后顶栏被 header 盖住（表现为"往下翻就不见了"）
-13. **顶栏自动隐藏参数**：`READER_TOPBAR.REVEAL_ZONE`(80px) 与 `HIDE_DELAY`(2000ms)；隐藏态是 `.reader-top.hidden`，改动时须同步 `stickyOffset()` 的留白计算
+12. **双栏定位**：上栏（站点 `header`）`sticky; top:0` z-index 100；下栏（`.reader-top`）`fixed; bottom:0` z-index 200。下栏若改回吸顶会与上栏重叠被盖住
+13. **双栏自动隐藏参数**：`READER_TOPBAR.REVEAL_ZONE`(80px，顶部/底部共用) 与 `HIDE_DELAY`(2000ms)；上栏隐藏类 `header.bar-hidden`、下栏 `.reader-top.hidden`，改动时须同步 `stickyOffset()` 的留白计算
 14. **自动滚动的时间基准**：`dt` 必须按 `AUTOSCROLL.MAX_FRAME_MS`(100ms) 限幅，且首帧只建立基准不移动；判断"最后一话"用 `chapIdx` 而非 `viewChapIdx`
 15. **自动滚动速度**：`state.autoSpeed`（10–300 px/s）存 `manga_prefs.autoSpeed`；键盘中断检查必须在 `INPUT`/`TEXTAREA` 判断之后，否则调速度会停掉滚动
 

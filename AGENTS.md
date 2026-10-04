@@ -102,7 +102,7 @@ my-mirror/
 6. 逐个匹配 `ALLOWED_DATA` → `serveData()`
 7. 都不命中 → 404 JSON（`no rule matched`），避免变成任意转发器
 
-### `manga_reader.html`（前端，1266 行）
+### `manga_reader.html`（前端，1412 行）
 
 单文件 SPA，包含 HTML + CSS + JS：
 
@@ -116,7 +116,7 @@ my-mirror/
    - 阅读器（`openChapter` / `setupLazy`）：图片懒加载 + 阅读进度条
    - **连续阅读**（`toggleContinuous` / `preloadNextChapter` / `setupContinuousLoader`）：滚到底自动把下一话图片追加到页面底部，不翻页
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
-   - **顶栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `stickyOffset`）：鼠标移近顶部 80px 唤出，离开 2 秒淡出
+   - **双栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `hideHeaderBar`）：上栏站点导航吸顶、下栏操作栏吸底，鼠标靠近哪边唤出哪边，各 2 秒淡出
    - **自动滚动**（`toggleAutoScroll` / `setAutoSpeed` / `autoScrollTick`）：速度滑杆 10–300 px/s，滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
    - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`
@@ -134,7 +134,7 @@ my-mirror/
 #### 两个"话号"的区别（易错点）
 
 - `state.chapIdx` = **最后已加载话**，用于驱动预加载。
-- `state.viewChapIdx` = **视口所在话**，用于顶栏 meta、进度文本、历史记录、跳转面板高亮。
+- `state.viewChapIdx` = **视口所在话**，用于下栏 meta、进度文本、历史记录、跳转面板高亮。
 - 显示与记录一律用 `viewChapIdx`；用 `chapIdx` 会导致"连续阅读下历史记成最新一话""进度条随预加载倒退""标题剧透"。
 
 #### 显示设置与宽度模式的约定
@@ -159,15 +159,26 @@ my-mirror/
 - 速度滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
 - 离开阅读器（`navigate` 非 reader 分支）调用 `stopAutoScroll()`。
 
-#### 阅读器顶栏（`.reader-top`）的约定
+#### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
-- 顶栏是阅读器内的操作条（`#readerMeta` / `#progressTxt` / `#progressBar` + 7 个按钮），**不是**站点 `<header>`，两者都在 `position:sticky; top:0`。
-- **z-index 必须高于站点 header**（header=100，顶栏=200）。曾因顶栏 z-index=50 低于 header，滚动后两者都吸到 top:0，顶栏被 header 完全盖住（表现为"往下翻就不见了"）。
-- 自动隐藏：鼠标 `clientY <= READER_TOPBAR.REVEAL_ZONE`(80px) 唤出；离开后 `HIDE_DELAY`(2000ms) 淡出（`.reader-top.hidden` 用 `translateY(-100%)+opacity:0`）。
-- 鼠标悬停在顶栏上（`:hover`）时不隐藏，避免操作到一半消失。
-- 隐藏时一并收起 `#readerTools` 与 `#rulesPanel`（它们紧贴顶栏，否则会悬空）。
-- 仅 `state.view === 'reader'` 生效；离开阅读器调用 `leaveReaderTopbar()` 复位显示。
-- `scrollToImg()` 用 `stickyOffset()` 计算留白（header + 顶栏实际高度），顶栏隐藏时留白自动变小；不要写死高度。
+阅读器里有**两条独立的栏**，都吸附、都能自动隐藏：
+
+| | 上栏 | 下栏 |
+|---|---|---|
+| 元素 | 站点 `<header>`（logo/书源徽章/首页/分类/搜索） | `.reader-top`（标题/meta/进度/7 个按钮） |
+| 定位 | `position:sticky; top:0` | `position:fixed; bottom:0` |
+| 隐藏类 | `header.bar-hidden`（`translateY(-100%)` 上滑） | `.reader-top.hidden`（`translateY(100%)` 下滑） |
+| 唤出区 | 鼠标进入**顶部** 80px | 鼠标进入**底部** 80px |
+| 定时器 | `READER_TOPBAR.headerTimer` | `READER_TOPBAR.timer` |
+
+- 两栏**各自独立**显隐，互不干扰：鼠标在顶部只唤出上栏，在底部只唤出下栏（`onReaderMouseMove` 同时判断两侧，各走各的分支）。
+- 各自悬停（`:hover`）时不隐藏，避免操作到一半消失。
+- `READER_TOPBAR.REVEAL_ZONE`(80px) 与 `HIDE_DELAY`(2000ms) 为两栏共用参数。
+- `mouseleave` / `window.blur` → 两栏都立即隐藏（不等 2 秒）。
+- 离开阅读器（`leaveReaderTopbar`）：两栏复位显示、关掉面板、移除 `body.in-reader`。
+- `body.in-reader` 只负责 `#view-reader` 的 `padding-bottom:64px`（内容不被底部栏遮住），**不再隐藏上栏**。
+- 设置/规则面板吸附在**下栏上方**（`bottom:56px`）从底部弹出；面板打开时下栏不隐藏（否则面板会被一起吃掉，表现为"点设置没反应"）。
+- `scrollToImg()` 用 `stickyOffset()` 只计算**下栏**高度（顶部无吸附栏需要避让）；下栏隐藏时留白回落到 10px。
 
 ### `vercel.json`（部署配置）
 

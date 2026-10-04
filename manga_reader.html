@@ -5,7 +5,9 @@
 :root{--bg:#1a1a2e;--card:#16213e;--accent:#e94560;--ln:#0f3460;--mut:#a8a8b3;--text:#eaeaea;--success:#4ecca3}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:100;flex-wrap:wrap;gap:8px;transition:transform .25s ease,opacity .25s ease}
+/* 上栏（站点导航）自动隐藏：向上滑出 */
+header.bar-hidden{transform:translateY(-100%);opacity:0;pointer-events:none}
 .logo{font-size:20px;font-weight:700;color:var(--accent);cursor:pointer}
 header nav button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px}
 header nav button.active,header nav button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -34,10 +36,9 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-top:1px solid var(--ln);position:fixed;left:0;right:0;bottom:0;top:auto;z-index:200;flex-wrap:wrap;transition:transform .25s ease,opacity .25s ease}
 /* 自动隐藏：向下滑出视口（.hidden 由 JS 切换） */
 .reader-top.hidden{transform:translateY(100%);opacity:0;pointer-events:none}
-/* 阅读器视图：顶部站点导航隐藏（Pixiv 式沉浸阅读），底部留出操作栏高度 */
-body.in-reader header{display:none}
+/* 阅读器视图：上栏站点导航保留（可自动隐藏），内容底部留出操作栏高度 */
 body.in-reader #view-reader{padding-bottom:64px}
-/* 设置/规则面板：吸附在操作栏上方，从底部弹出 */
+/* 设置/规则面板：吸附在底部操作栏上方，从底部弹出 */
 body.in-reader #readerTools,body.in-reader #rulesPanel{position:fixed;left:0;right:0;bottom:56px;max-height:52vh;overflow-y:auto;margin:0;border-radius:0;z-index:199}
 .reader-top .rt-title{font-size:14px;color:var(--accent);cursor:pointer;font-weight:700;white-space:nowrap}
 .reader-top .meta{font-size:13px;color:var(--mut);flex:1 1 100px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -881,9 +882,10 @@ window.addEventListener('resize', ()=>{ if(state.view==='reader'){ updateProgres
  * 纯前端 UI 行为，不涉及代理层
  * ============================================================ */
 const READER_TOPBAR = {
-  REVEAL_ZONE: 80,   // 鼠标进入底部这个像素带 → 显示
+  REVEAL_ZONE: 80,   // 鼠标进入顶部/底部这个像素带 → 显示对应栏
   HIDE_DELAY: 2000,  // 鼠标离开后多久淡出（毫秒）
-  timer: null,
+  timer: null,       // 下栏（操作栏）隐藏定时器
+  headerTimer: null, // 上栏（站点导航）隐藏定时器
   bound: false
 };
 
@@ -903,18 +905,53 @@ function anyReaderPanelOpen(){
   return !!((tools && tools.classList.contains('on')) || (rules && rules.classList.contains('on')));
 }
 
+/* ---------- 上栏（站点 header，吸顶）自动隐藏 ---------- */
+function isHeaderShown(){
+  const hd = document.querySelector('header');
+  return !!hd && !hd.classList.contains('bar-hidden');
+}
+function showHeaderBar(){
+  const hd = document.querySelector('header');
+  if(hd) hd.classList.remove('bar-hidden');
+}
+function hideHeaderBar(){
+  const hd = document.querySelector('header');
+  if(!hd) return;
+  if(hd.matches(':hover')) return;   // 鼠标还停在上面（可能点导航）就不隐藏
+  hd.classList.add('bar-hidden');
+}
+function scheduleHeaderHide(){
+  clearTimeout(READER_TOPBAR.headerTimer);
+  READER_TOPBAR.headerTimer = setTimeout(()=>{
+    if(state.view !== 'reader') return;
+    hideHeaderBar();
+  }, READER_TOPBAR.HIDE_DELAY);
+}
+function cancelHeaderHide(){
+  if(READER_TOPBAR.headerTimer){ clearTimeout(READER_TOPBAR.headerTimer); READER_TOPBAR.headerTimer = null; }
+}
+
+/* ---------- 下栏（阅读器操作栏，吸底）自动隐藏 ---------- */
+function isTopbarShown(){
+  const rt = document.querySelector('.reader-top');
+  return !!rt && !rt.classList.contains('hidden');
+}
+function showTopbar(){
+  const rt = document.querySelector('.reader-top');
+  if(!rt) return;
+  rt.classList.remove('hidden');
+}
 function hideTopbar(){
   const rt = document.querySelector('.reader-top');
   if(!rt) return;
-  // 鼠标还停在顶栏上（可能在操作按钮）就不隐藏
+  // 鼠标还停在操作栏上（可能在点按钮）就不隐藏
   if(rt.matches(':hover')) return;
-  // 面板打开时既不隐藏顶栏、也不收起面板：
-  // 面板位于顶栏下方，鼠标必然离开顶部区域去操作它，
+  // 面板打开时不隐藏：面板吸附在操作栏上方，鼠标必然离开栏区去操作它，
   // 若无条件隐藏会把面板一起吃掉（表现为"点设置没反应"）
   if(anyReaderPanelOpen()) return;
   rt.classList.add('hidden');
 }
-/** 鼠标离开后延时隐藏；移回顶部会取消 */
+/** 鼠标离开后延时隐藏；移回底部会取消 */
 function scheduleTopbarHide(){
   clearTimeout(READER_TOPBAR.timer);
   READER_TOPBAR.timer = setTimeout(()=>{
@@ -929,13 +966,22 @@ function cancelTopbarHide(){
   if(READER_TOPBAR.timer){ clearTimeout(READER_TOPBAR.timer); READER_TOPBAR.timer = null; }
 }
 
+/** 鼠标移动：上栏与下栏各自按就近原则显隐，互不干扰 */
 function onReaderMouseMove(e){
   if(state.view !== 'reader') return;
-  // 操作栏在底部：鼠标进入底部 REVEAL_ZONE 像素带 → 显示
-  const fromBottom = window.innerHeight - e.clientY;
-  if(fromBottom <= READER_TOPBAR.REVEAL_ZONE){
-    cancelTopbarHide();
-    showTopbar();
+  const y = e.clientY;
+  const H = window.innerHeight;
+
+  // 上栏：鼠标进入顶部 REVEAL_ZONE 像素带 → 显示；离开 → 延时隐藏
+  if(y <= READER_TOPBAR.REVEAL_ZONE){
+    cancelHeaderHide(); showHeaderBar();
+  }else if(isHeaderShown()){
+    scheduleHeaderHide();
+  }
+
+  // 下栏：鼠标进入底部 REVEAL_ZONE 像素带 → 显示；离开 → 延时隐藏
+  if(H - y <= READER_TOPBAR.REVEAL_ZONE){
+    cancelTopbarHide(); showTopbar();
   }else if(isTopbarShown()){
     scheduleTopbarHide();
   }
@@ -946,31 +992,38 @@ function bindTopbarAutoHide(){
   if(READER_TOPBAR.bound) return;
   READER_TOPBAR.bound = true;
   document.addEventListener('mousemove', onReaderMouseMove, {passive:true});
-  // 鼠标离开窗口 / 切到别的标签页 → 直接隐藏，回来时靠 mousemove 唤出
+  // 鼠标离开窗口 / 切到别的标签页 → 两栏都立即隐藏，回来时靠 mousemove 唤出
   document.addEventListener('mouseleave', ()=>{
-    if(state.view === 'reader'){ clearTimeout(READER_TOPBAR.timer); hideTopbar(); }
+    if(state.view === 'reader'){
+      cancelTopbarHide(); hideTopbar();
+      cancelHeaderHide(); hideHeaderBar();
+    }
   });
   window.addEventListener('blur', ()=>{
-    if(state.view === 'reader'){ clearTimeout(READER_TOPBAR.timer); hideTopbar(); }
+    if(state.view === 'reader'){
+      cancelTopbarHide(); hideTopbar();
+      cancelHeaderHide(); hideHeaderBar();
+    }
   });
 }
 
-/** 进入阅读器时启用（顶栏初始显示，鼠标不动 2 秒后自动收起） */
+/** 进入阅读器时启用（两栏初始显示，鼠标不动 2 秒后各自收起） */
 function enterReaderTopbar(){
   bindTopbarAutoHide();
-  document.body.classList.add('in-reader');   // 隐藏站点 header（Pixiv 式沉浸阅读）
-  showTopbar();
-  scheduleTopbarHide();
+  document.body.classList.add('in-reader');
+  showHeaderBar();  scheduleHeaderHide();   // 上栏：站点导航
+  showTopbar();     scheduleTopbarHide();   // 下栏：操作栏
   scheduleFitReaderTop();   // 进入阅读器先做一次单行自适应
 }
-/** 离开阅读器时复位（恢复显示、关掉面板、恢复站点 header） */
+/** 离开阅读器时复位（两栏恢复显示、关掉面板、移除 in-reader） */
 function leaveReaderTopbar(){
-  clearTimeout(READER_TOPBAR.timer);
+  cancelTopbarHide(); cancelHeaderHide();
   document.body.classList.remove('in-reader');
   const tools = document.getElementById('readerTools');
   if(tools) tools.classList.remove('on');
   const rules = document.getElementById('rulesPanel');
   if(rules) rules.classList.remove('on');
+  showHeaderBar();
   showTopbar();
 }
 
