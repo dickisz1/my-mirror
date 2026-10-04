@@ -197,7 +197,7 @@ body.zoomed{overflow:hidden}
   <!-- 阅读器 -->
   <div id="view-reader" class="view">
     <div class="reader-top">
-      <span class="rt-title" onclick="navigate('home')">漫蛙</span>
+      <span class="rt-title" onclick="backToDetail()" title="返回详情页">← 详情</span>
       <span class="rt-title" id="readerTitle"></span>
       <span class="meta" id="readerMeta"></span>
       <span class="progress-txt" id="progressTxt">第 1 话</span>
@@ -239,7 +239,7 @@ body.zoomed{overflow:hidden}
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ← → 切换话 | 空格 翻屏 | J/K 上下话 | 鼠标: 单击 左=上一话 中=放大 右=下一话 · 右键菜单</div>
+    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单</div>
   </div>
 </div>
 
@@ -638,6 +638,13 @@ let _fitRaf = null;
 function scheduleFitReaderTop(){
   if(_fitRaf) cancelAnimationFrame(_fitRaf);
   _fitRaf = requestAnimationFrame(()=>{ _fitRaf = null; fitReaderTop(); });
+}
+
+/** 返回详情页（Pixiv ③「关闭阅读器回到作品详情」的对应实现）。
+ *  进度已在 navigate 的离开分支落盘，这里只负责切视图。 */
+function backToDetail(){
+  if(state.comic && state.comic.id != null) navigate('detail');
+  else navigate('home');
 }
 
 /** 平滑滚动到指定图片下标（话内位置跳转用） */
@@ -1222,12 +1229,14 @@ function unzoomImage(){
   window.scrollTo(0, MOUSE_UI.zoomOrigin);
 }
 
-/* ---------- 单击分区：左=上一话 / 中=放大切换 / 右=下一话（Pixiv 模型） ---------- */
-/** 判断点击落在图片的左/中/右哪一区；不在图片内返回 null */
-function clickZoneAt(clientX){
+/* ---------- 单击分区：上=上一张 / 中=放大切换 / 下=下一张（Pixiv 竖读模型） ----------
+   条漫（webtoon）是一长条故事被切成多张短图连贯拼接，所以"翻页"= 翻下一张切图；
+   到本章最后一张再点才进入下一话。按**视口高度**三等分（不是按图片高度），
+   否则长图下会留出大片"点了没反应"的死区。 */
+function clickZoneAt(clientY){
   const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
   if(!figs.length) return null;
-  // 取当前视口内最靠上的那张图作为"页面"边界（记元素本身，不是 rect）
+  // 取当前视口内最靠上的那张图作为"放大"的目标（记元素本身，不是 rect）
   let target = null, best = Infinity;
   for(const f of figs){
     const r = f.getBoundingClientRect();
@@ -1235,12 +1244,24 @@ function clickZoneAt(clientX){
     if(r.top < best){ best = r.top; target = f; }
   }
   if(!target) target = figs[figs.length - 1];
-  const r = target.getBoundingClientRect();
-  if(clientX < r.left || clientX > r.right) return null;   // 图片左右留白区不响应
-  const third = r.width / 3;
-  if(clientX < r.left + third) return { zone: 'prev', wrap: target };
-  if(clientX > r.right - third) return { zone: 'next', wrap: target };
-  return { zone: 'center', wrap: target };                 // 中央 = 放大切换
+
+  const vh = window.innerHeight;
+  if(clientY < vh / 3) return { zone: 'prev', wrap: target };
+  if(clientY > vh * 2 / 3) return { zone: 'next', wrap: target };
+  return { zone: 'center', wrap: target };   // 中央 = 放大切换
+}
+
+/** 翻到相邻的一张切图；越过本章首/末则切话 */
+function scrollToAdjacentImage(dir){
+  const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
+  if(!figs.length) return;
+  const cur = Math.max(0, state.viewPos || 0);
+  const next = cur + dir;
+  if(next < 0){ navByZone('prev'); return; }                 // 已在本章第一张 → 上一话
+  if(next >= figs.length){ navByZone('next'); return; }      // 已在本章最后一张 → 下一话
+  scrollToImg(next);
+  state.viewPos = next;   // 立即更新，保证连点能连续推进
+  showReaderToast(dir > 0 ? ('第 ' + (next + 1) + ' 张') : ('第 ' + (next + 1) + ' 张'));
 }
 
 function navByZone(zone){
@@ -1319,17 +1340,19 @@ function bindReaderMouseUI(){
   const area = document.getElementById('readerArea');
   if(!area) return;
 
-  /* 单击分区（Pixiv 模型，无需延时判定，也就不存在"双击误翻话"的冲突）：
-       左 1/3 → 上一话 ｜ 中央 1/3 → 放大切换 ｜ 右 1/3 → 下一话
+  /* 单击分区（Pixiv 竖读模型，无需延时判定）：
+       上 1/3 → 上一张切图（本章第一张则上一话）
+       中央 1/3 → 放大切换
+       下 1/3 → 下一张切图（本章最后一张则下一话）
      放大态下任意单击 = 复原。 */
   area.addEventListener('click', e=>{
     if(state.view !== 'reader') return;
     if(e.button !== 0) return;
     if(isZoomed()){ unzoomImage(); return; }
-    const hit = clickZoneAt(e.clientX);
+    const hit = clickZoneAt(e.clientY);
     if(!hit) return;
     if(hit.zone === 'center'){ toggleZoom(hit.wrap); return; }
-    navByZone(hit.zone);
+    scrollToAdjacentImage(hit.zone === 'next' ? 1 : -1);
   });
 
   // 右键 → 快捷菜单
@@ -1544,10 +1567,16 @@ document.addEventListener('keydown', e=>{
   userInterruptAutoScroll();
 
   switch(e.key){
+    case 'Escape': backToDetail(); break;   // 无浮层/放大时的 Esc = 返回详情页（Pixiv ③）
     case 'ArrowRight': nextChapter(); break;
     case 'ArrowLeft':  prevChapter(); break;
     case 'k': case 'K': prevChapter(); break;
     case 'j': case 'J': nextChapter(); break;
+    case 'v': case 'V':                      // Pixiv: V 切换原始尺寸
+      e.preventDefault();
+      setImgWidth(state.imgWidth === 'orig' ? 'fit' : 'orig');
+      showReaderToast(state.imgWidth === 'orig' ? '原始尺寸' : '适应宽度');
+      break;
     case ' ': case 'Spacebar':        // 空格：翻一屏
       e.preventDefault();
       window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
