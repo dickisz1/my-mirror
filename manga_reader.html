@@ -29,9 +29,16 @@ header nav button.active,header nav button:hover{background:var(--accent);color:
 .chap-item{padding:10px 14px;border-bottom:1px solid var(--ln);cursor:pointer;display:flex;justify-content:space-between;font-size:13px;transition:background .2s}
 .chap-item:last-child{border-bottom:none}
 .chap-item:hover,.chap-item.active{background:var(--card);color:var(--accent)}
-.reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--ln);position:sticky;top:0;z-index:200;flex-wrap:wrap;transition:transform .25s ease,opacity .25s ease}
-/* 自动隐藏：鼠标移近顶部才显示（.hidden 由 JS 切换） */
-.reader-top.hidden{transform:translateY(-100%);opacity:0;pointer-events:none}
+/* 阅读器操作栏：吸附在视口底部（参考 Pixiv），鼠标移近底部才出现。
+   类名沿用 .reader-top（历史原因），语义已是"底部操作栏" */
+.reader-top{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--card);border-top:1px solid var(--ln);position:fixed;left:0;right:0;bottom:0;top:auto;z-index:200;flex-wrap:wrap;transition:transform .25s ease,opacity .25s ease}
+/* 自动隐藏：向下滑出视口（.hidden 由 JS 切换） */
+.reader-top.hidden{transform:translateY(100%);opacity:0;pointer-events:none}
+/* 阅读器视图：顶部站点导航隐藏（Pixiv 式沉浸阅读），底部留出操作栏高度 */
+body.in-reader header{display:none}
+body.in-reader #view-reader{padding-bottom:64px}
+/* 设置/规则面板：吸附在操作栏上方，从底部弹出 */
+body.in-reader #readerTools,body.in-reader #rulesPanel{position:fixed;left:0;right:0;bottom:56px;max-height:52vh;overflow-y:auto;margin:0;border-radius:0;z-index:199}
 .reader-top .rt-title{font-size:14px;color:var(--accent);cursor:pointer;font-weight:700;white-space:nowrap}
 .reader-top .meta{font-size:13px;color:var(--mut);flex:1 1 100px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .progress{flex:1 1 80px;min-width:50px;height:4px;background:var(--ln);border-radius:2px;overflow:hidden}
@@ -571,15 +578,12 @@ async function openChapter(idx){
 function prevChapter(){ if(state.viewChapIdx>0) openChapter(state.viewChapIdx-1); }
 function nextChapter(){ if(state.viewChapIdx < state.chapters.length-1) openChapter(state.viewChapIdx+1); }
 
-/** 当前吸顶栏的总高度（站点 header + 阅读器顶栏），用于滚动定位留白 */
+/** 底部操作栏占用高度（用于给内容留白，避免被栏遮住） */
 function stickyOffset(){
-  let h = 0;
-  const hd = document.querySelector('header');
   const rt = document.querySelector('.reader-top');
-  if(hd) h += hd.getBoundingClientRect().height;
-  // 顶栏自动隐藏时不占位，无需留白
-  if(rt && !rt.classList.contains('hidden')) h += rt.getBoundingClientRect().height;
-  return h + 10;
+  // 操作栏在底部：顶部没有吸附栏，内容只需在底部留出操作栏高度
+  if(rt && !rt.classList.contains('hidden')) return rt.getBoundingClientRect().height + 10;
+  return 10;
 }
 
 /** 顶栏自适应：检测是否真的换行/溢出，逐级加 compact / narrow 类。
@@ -877,7 +881,7 @@ window.addEventListener('resize', ()=>{ if(state.view==='reader'){ updateProgres
  * 纯前端 UI 行为，不涉及代理层
  * ============================================================ */
 const READER_TOPBAR = {
-  REVEAL_ZONE: 80,   // 鼠标进入顶部这个像素带 → 显示
+  REVEAL_ZONE: 80,   // 鼠标进入底部这个像素带 → 显示
   HIDE_DELAY: 2000,  // 鼠标离开后多久淡出（毫秒）
   timer: null,
   bound: false
@@ -927,7 +931,9 @@ function cancelTopbarHide(){
 
 function onReaderMouseMove(e){
   if(state.view !== 'reader') return;
-  if(e.clientY <= READER_TOPBAR.REVEAL_ZONE){
+  // 操作栏在底部：鼠标进入底部 REVEAL_ZONE 像素带 → 显示
+  const fromBottom = window.innerHeight - e.clientY;
+  if(fromBottom <= READER_TOPBAR.REVEAL_ZONE){
     cancelTopbarHide();
     showTopbar();
   }else if(isTopbarShown()){
@@ -952,13 +958,15 @@ function bindTopbarAutoHide(){
 /** 进入阅读器时启用（顶栏初始显示，鼠标不动 2 秒后自动收起） */
 function enterReaderTopbar(){
   bindTopbarAutoHide();
+  document.body.classList.add('in-reader');   // 隐藏站点 header（Pixiv 式沉浸阅读）
   showTopbar();
   scheduleTopbarHide();
   scheduleFitReaderTop();   // 进入阅读器先做一次单行自适应
 }
-/** 离开阅读器时复位（恢复显示、关掉面板，便于下次进入重新计时） */
+/** 离开阅读器时复位（恢复显示、关掉面板、恢复站点 header） */
 function leaveReaderTopbar(){
   clearTimeout(READER_TOPBAR.timer);
+  document.body.classList.remove('in-reader');
   const tools = document.getElementById('readerTools');
   if(tools) tools.classList.remove('on');
   const rules = document.getElementById('rulesPanel');
