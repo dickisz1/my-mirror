@@ -333,34 +333,50 @@ autoScrollTick(ts) 每帧：
 
 ### API 路径契约
 
-前端一律通过 `/api/proxy?p=<目标路径>&<参数>` 访问；代理端同时兼容裸路径。
+前端一律通过 `/api/proxy?p=<目标路径>&<参数>&src=<源key>` 访问；代理端同时兼容裸路径。
+
+**`src` 是源选择参数**，缺省或未知时回落 `DEFAULT_SOURCE`（`manwaxu`）——这是**最重要的兼容契约**：旧链接、旧缓存、书签全部继续可用。`src` 不会透传给上游。
 
 | 路径（`p=` 的值） | 方法 | 参数 | 返回 | 说明 |
 |------|------|------|------|------|
-| `/api/source/rules` | GET | — | JSON (书源规则) | 前端启动时拉取权威规则 |
+| `/api/sources` | GET | — | JSON (源列表) | 可用书源列表（不含密钥/rules/UA） |
+| `/api/source/rules` | GET | `src`(可选) | JSON (书源规则) | 返回**单个源对象**（含 `rules`） |
 | `/api/home` | GET | page, pageSize, type, flag | JSON (漫画列表) | 首页/分类列表 |
 | `/api/search` | GET | keyword, page, pageSize | JSON (搜索结果) | 搜索漫画 |
 | `/api/comic/{id}` | GET | — | JSON (漫画详情) | 漫画详情+封面+简介 |
-| `/api/comic/{id}/chapters` | GET | — | JSON (章节列表) | 章节列表 |
+| `/api/comic/{id}/chapters` | GET | — | JSON (章节列表) | 章节列表（无章节源合成 1 话） |
 | `/api/comic/chapter/info/{cid}` | GET | — | JSON (章节信息) | 章节元信息 |
 | `/api/comic/image/{cid}` | GET | page, page_size, image_source | JSON (图片列表) | 章节图片 |
 | `/api/announcements` | GET | — | JSON (公告) | 站点公告 |
-| `/en_images/*` | GET | — | 图片(解密后) | 图片资源(经CDN容灾+解密) |
+| `/en_images/*` | GET | `src` | 图片(解密后) | manwaxu 图片（CDN 容灾 + AES 解密） |
+| `/(img-master\|img-original\|c\|user-profile)/*` | GET | `src` | 图片(明文) | pixiv 图片（固定 host + Referer 防盗链） |
 
-### 书源规则契约
+### 书源注册表契约
 
-书源规则是驱动整个系统的"配置文件"，前端和代理端各持有一份副本：
+书源定义集中在 `api/proxy.js` 的 `SOURCES` 注册表（key → 源定义）：
 
-- **前端副本**：`manga_reader.html` 中的 `BOOK_SOURCES_DEFAULT` 常量
-- **代理端副本**：`api/proxy.js` 中的 `BOOK_SOURCES` 对象（通过 `/api/source/rules` 接口提供）
+- **前端内联默认值**：`manga_reader.html` 的 `BOOK_SOURCES_DEFAULT`（仅作拉取失败时的兜底）
+- **权威副本**：`api/proxy.js` 的 `SOURCES`，经 `/api/source/rules?src=<key>` 按源提供
+- **列表接口**：`/api/sources` 返回 `[{key,name,version,baseUrl}]`，**不含** `decrypt.key`/`rules`/`userAgent`
 
-**同步规则：** 修改规则时，两处必须保持一致。前端启动时会从代理端拉取权威副本覆盖本地值；拉取失败则使用内联默认值。
+**同步规则：** 新增源 = 在 `SOURCES` 加一项即可，前端无需改动（源列表与栏目都由代理端下发）。前端启动顺序：`loadSourceList()` → `loadRules()` → `navigate('home')`。
+
+**源定义关键字段：**
+
+| 字段 | 作用 |
+|------|------|
+| `baseUrl` / `referer` | 上游地址与 Referer（pixiv 的防盗链靠 Referer） |
+| `imageCdn[]` / `decrypt` | 图片容灾链与解密参数（pixiv 为 `[]` + `enabled:false`） |
+| `rules{action}` | `match` 正则匹配前端路径；`path` 上游模板；`params` 白名单；`vars` 路径变量；`paramMap` 参数改名；`paramDefaults` 默认值；`multi` 多请求组装 |
+| `imageRule` | `match` 图片路径正则；`host` 固定单 host 或 `cdn:true` 走容灾链；`decrypt` |
+| `adapt` | 字段归一化声明（见 `AGENTS.md`） |
+| `homeSections` | 首页栏目（grid / title / 该源响应里的列表 key） |
 
 ## 不能破坏的契约
 
 1. **API 路径**：`/api/home`、`/api/search` 等路径不能改名，否则前端请求全部 404
 2. **JSON 数据结构**：`comicList`、`list`、`images` 等字段名不能改
-3. **书源规则格式**：`BOOK_SOURCES` 的 key/path/params 结构不能变
+3. **书源规则格式**：`SOURCES` 的 key/path/params 结构不能变
 4. **图片解密参数**：算法(AES-256-CBC)、密钥、IV 长度不能变，否则图片全黑
 5. **CDN 域名顺序**：容灾链顺序影响图片加载成功率
 6. **HTML 类名/ID**：前端 JS 中大量使用 `querySelector` 选择器（如 `#readerArea`、`.cimg`、`.imgwrap`），改了类名会导致图片不显示
@@ -379,6 +395,12 @@ autoScrollTick(ts) 每帧：
 19. **翻张锚点 `AUTOSCROLL.anchorPos`**：`scrollToImg` 是 `behavior:'smooth'`，平滑途中 `scroll` 事件会经 `updateProgressUI` → `computeViewPos()` 覆写 `state.viewPos`；推进若直接读 `viewPos`，步进会变成 2/3 甚至回退。锚点隔离污染，**手动滚动（`userInterruptAutoScroll`）与换话（`openChapter`）必须置 `null`**
 20. **逐张翻的定时器**：`AUTOSCROLL.timer`（`setTimeout`）与 `AUTOSCROLL.raf` 互斥，`stopAutoScroll()` 两者都清；运行中切模式必须重启，否则旧定时器继续跑
 21. **提示开关**：`state.showToast` 存 `manga_prefs.showToast`；`showReaderToast(msg, force)` 的 `force=true` 用于状态类提示（「已开启/关闭提示」），否则用户关掉开关后看不到自己的操作结果
+22. **`src` 参数必须贯穿所有请求**：`buildUrl()` 与 `toProxyPath()` 是唯一注入点。**图片请求漏带 `src` 会导致「封面正常、正文错乱」**——最难排查的一类多源 bug
+23. **`/api/source/rules` 必须返回单个源对象**（含 `.rules`）：前端是 `if(j && j.rules)` 判定成功，若改成数组会**静默回落内联默认值且不报错**
+24. **`src` 缺省必须回落默认源**：这是旧链接/旧缓存/书签继续可用的唯一保证，改动 `resolveSource` 时必须保留
+25. **`adapt.searchField` 与 `adapt.field` 分开**：pixiv 的 ranking 端点用 `illust_id`/`user_name`，search 端点用 `id`/`userName`。只声明一套会让搜索结果 id/author 全空（点进详情 404）——这是线上实测踩到的坑
+26. **首页栏目由源的 `homeSections` 驱动**：切源时必须把**非本源的栏目清空并隐藏**，否则残留上一个源的卡片
+27. **单话源的判定**：`adapt.fakeChapters && state.chapters.length <= 1`。单话源下上下话入口置灰并提示「本作品仅 1 话」，多话源不受影响
 
 ## 风险清单
 
