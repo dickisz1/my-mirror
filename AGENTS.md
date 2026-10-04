@@ -117,7 +117,8 @@ my-mirror/
    - **连续阅读**（`toggleContinuous` / `preloadNextChapter` / `setupContinuousLoader`）：滚到底自动把下一话图片追加到页面底部，不翻页
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
    - **双栏自动隐藏**（`enterReaderTopbar` / `hideTopbar` / `hideHeaderBar`）：上栏站点导航吸顶、下栏操作栏吸底，鼠标靠近哪边唤出哪边，各 2 秒淡出
-   - **自动滚动**（`toggleAutoScroll` / `setAutoSpeed` / `autoScrollTick`）：速度滑杆 10–300 px/s，滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
+   - **自动推进**（`toggleAutoScroll` / `setAutoSpeed` / `setAutoStepMode` / `setAutoDwell` / `autoScrollTick` / `autoImgStep`）：两种模式——像素滚动（速度滑杆 10–300 px/s）与逐张翻（停留滑杆 500–10000ms）；滚到底自动衔接连续阅读；滚轮/触摸/按键立即停止
+   - **「第 N 张」提示开关**（`setShowToast` / `showReaderToast(msg, force)`）：设置面板可关，存 `manga_prefs.showToast`；状态类提示带 `force` 始终显示
    - **鼠标交互**（`bindReaderMouseUI` / `toggleZoom` / `clickZoneAt` / `scrollToAdjacentImage` / `openCtxMenu`，Pixiv 竖读模型）：单击 上=上一张切图 中=放大 下=下一张切图（末张则下一话）、右键快捷菜单
    - **返回详情页**（`backToDetail`）：底部栏「← 详情」与 `Esc` 均可返回（对应 Pixiv ③）
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
@@ -151,15 +152,47 @@ my-mirror/
 
 #### 自动滚动的约定
 
+自动推进有两种模式，由 `state.autoStepMode` 选择（设置面板「自动翻张」行切换）：
+
+| 模式 | 值 | 实现 | 适用 |
+|---|---|---|---|
+| 像素滚动 | `'px'`（默认） | `requestAnimationFrame` + `autoScrollTick` | 连续平滑，适合慢慢看 |
+| 逐张翻 | `'img'` | `setTimeout` + `autoImgStep` | 每张停一下，适合快速过图 |
+
+**像素滚动模式**
+
 - 速度滑杆 `#speedRange`（10–300 px/s，步长 10）存 `state.autoSpeed`，持久化在 `manga_prefs.autoSpeed`。
 - 推进公式：`window.scrollTo(0, scrollY + autoSpeed * dt / 1000)`，`dt` 由 `requestAnimationFrame` 时间戳相减得出。
 - **`dt` 必须限幅**（`AUTOSCROLL.MAX_FRAME_MS = 100`）：标签页被切走后回来，`dt` 会是几千毫秒，不限幅会瞬间跳一大段。
 - **首帧不移动**：第一帧只建立 `last` 基准（`dt = 0`），否则会用到无意义的时间差。
 - 滚到底时：连续阅读开着就调 `preloadNextChapter()`，新内容撑开后自动继续；卡住超过 `AUTOSCROLL.STUCK_MS`(4000ms) 页面没长高 → 停止并提示。
 - 判断"是否最后一话"必须用 `state.chapIdx`（最后已加载话），**不能用 `viewChapIdx`**——后者是用户视口所在话，预加载失败时会误报"加载失败"。
-- 中断：`wheel` / `touchstart` / 键盘（输入框与滑杆聚焦时除外）→ 立即 `stopAutoScroll()`。自动滚动自身走 `window.scrollTo`，不触发这些事件，不会自我中断。
-- 速度滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
+
+**逐张翻模式**
+
+- 停留滑杆 `#dwellRange`（500–10000ms，步长 500）存 `state.autoDwell`，持久化在 `manga_prefs.autoDwell`。
+- `autoImgStep()`：调 `scrollToAdjacentImage(1)` 滚到下一张切图 → `setTimeout(autoImgStep, autoDwell)` 停留 → 再走下一张。
+- 越过本章末张时由 `scrollToAdjacentImage` 自动调 `navByZone('next')` 切下一话，锚点随之复位。
+- 放大看细节时**暂停推进但不停止**（复原后继续），避免放大期间被拖走。
+- 运行中切换模式（`setAutoStepMode`）会 `stopAutoScroll()` 再 `startAutoScroll()`，否则旧定时器/帧会继续跑。
+- `AUTOSCROLL.timer` 与 `AUTOSCROLL.raf` 互斥，`stopAutoScroll()` 两者都清。
+
+**两种模式共同**
+
+- **翻张锚点 `AUTOSCROLL.anchorPos` 是必需的**：`scrollToImg` 用 `behavior:'smooth'` 平滑滚动，途中持续触发 `scroll` → `updateProgressUI` 用 `computeViewPos()` 从滚动位置反推并覆写 `state.viewPos`。若推进直接读 `state.viewPos`，平滑途中读到的中间值会让步进变成 2、3 甚至回退（线上实测：停留设 1500ms，2.5 秒走了 3 张）。锚点隔离了这个污染，使步进恒为 1。
+  - `scrollToAdjacentImage` 读写锚点；`state.viewPos` 同时更新，供未启用锚点的路径读取。
+  - **手动滚动必须复位锚点**（`userInterruptAutoScroll()` 里置 `null`）：滚轮/触摸/按键意味着用户接管了位置，锚点若不复位会与用户实际操作打架。
+  - **换话必须复位锚点**（`openChapter()` 里置 `null`）：图片集变了，旧索引无意义。
+  - `anchorPos === null` 表示"跟随滚动位置反推的 `viewPos`"，是默认语义。
+- 中断：`wheel` / `touchstart` / 键盘（输入框与滑杆聚焦时除外）→ 立即 `stopAutoScroll()` + 复位锚点。自动滚动自身走 `window.scrollTo`，不触发这些事件，不会自我中断。
+- 速度/停留滑杆必须在滚动中可调：因此键盘处理里**先判断 `INPUT`/`TEXTAREA` 再调用中断**，否则操作滑杆会停掉自动滚动。
 - 离开阅读器（`navigate` 非 reader 分支）调用 `stopAutoScroll()`。
+
+#### 「第 N 张」提示的约定
+
+- `state.showToast`（设置面板「提示」行）控制 `showReaderToast()` 是否显示，持久化在 `manga_prefs.showToast`。
+- `showReaderToast(msg, force)`：`force=true` 时无视开关始终显示。**状态类提示必须带 `force`**（「已开启提示」/「已关闭提示」），否则用户关掉开关后就再也看不到自己操作的结果。
+- 关闭只影响提示，**不影响翻张行为**。
 
 #### 鼠标交互的约定（Pixiv 竖读模型）
 
