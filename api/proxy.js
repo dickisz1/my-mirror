@@ -724,7 +724,18 @@ function serveFrontend(res) {
 function serveRules(src, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=300');
-  return res.status(200).send(JSON.stringify(src));
+  /* JSON 序列化会把 RegExp 变成 {}，前端就拿不到 match 了。
+     而「本机 helper」开关需要前端自己把前端路径映射到 helper 端点，
+     所以额外暴露 matchStr（正则源码），前端用 new RegExp(matchStr) 复原。 */
+  const out = Object.assign({}, src);
+  out.rules = {};
+  Object.keys(src.rules || {}).forEach(k => {
+    const r = Object.assign({}, src.rules[k]);
+    if (r.match instanceof RegExp) r.matchStr = r.match.source;
+    delete r.match;                       // 保留原契约：match 不出现在响应里
+    out.rules[k] = r;
+  });
+  return res.status(200).send(JSON.stringify(out));
 }
 
 /** 源列表接口（不含密钥 / rules / userAgent） */

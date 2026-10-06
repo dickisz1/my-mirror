@@ -260,7 +260,7 @@ body.zoomed{overflow:hidden}
         <label>本机 helper</label>
         <button id="lh-on"  onclick="setLocalHelper(true)">开启</button>
         <button id="lh-off" onclick="setLocalHelper(false)">关闭</button>
-        <span style="color:var(--mut);font-size:11px">仅 18comic 源用：把请求转发到<b>你这台电脑</b>的 127.0.0.1:8765（需先在本机启动 helper.py）</span>
+        <span style="color:var(--mut);font-size:11px">仅 18comic 源用：<b>你这台设备</b>直连本机的 127.0.0.1:8765（需先在本机启动 helper.py）。换到别的设备要重新开，且那台设备也得跑 helper</span>
       </div>
     </div>
     <div id="rulesPanel"></div>
@@ -405,6 +405,59 @@ function helperQS(){
   return state.localHelper ? '&helper=' + encodeURIComponent(LOCAL_HELPER) : '';
 }
 
+/* ============================================================
+ * 本机 helper 直连（18comic）
+ * ------------------------------------------------------------
+ * 关键：helper 跑在**用户自己的电脑**上。代理跑在 Vercel，
+ * 代理的 127.0.0.1 是 Vercel 自己 —— 所以「让代理去连本机 helper」
+ * 必然失败（实测 502）。正确路径是**浏览器自己直连**：
+ *   Chrome 对 127.0.0.1 有混合内容豁免，helper 又带 CORS 头，
+ *   实测 https 页面 fetch('http://127.0.0.1:8765/health') → 200。
+ * 所以：开关开启 + 当前源是 viaHelper 源时，数据与图片都直连 helper。
+ * ============================================================ */
+
+/** 当前源是否走 helper（comic18 的 viaHelper 由代理端下发） */
+function isHelperSource(){ return !!(BOOK_SOURCES && BOOK_SOURCES.viaHelper); }
+
+/** 前端路径 → helper 端点（用源规则里的 matchStr 复原正则来匹配，不硬编码） */
+function helperEndpoint(path){
+  const rules = (BOOK_SOURCES && BOOK_SOURCES.rules) || {};
+  const actions = Object.keys(rules);
+  for(let i=0;i<actions.length;i++){
+    const r = rules[actions[i]];
+    if(!r || !r.matchStr) continue;
+    let re;
+    try{ re = new RegExp(r.matchStr); }catch(e){ continue; }
+    const m = String(path).match(re);
+    if(!m) continue;
+    // 路径变量（vars: {id:1} 表示第 1 个捕获组）→ 拼进 helper 的 query
+    const qs = [];
+    const vars = r.vars || {};
+    Object.keys(vars).forEach(name=>{
+      const spec = vars[name];
+      if(typeof spec === 'number' && m[spec] !== undefined) qs.push(encodeURIComponent(name)+'='+encodeURIComponent(m[spec]));
+      else if(typeof spec === 'string' && spec.indexOf('query:')===0){
+        const v = params_get(spec.slice(6));
+        if(v !== null && v !== '') qs.push(encodeURIComponent(name)+'='+encodeURIComponent(v));
+      }
+    });
+    // 规则声明的 query 参数（如 search 的 keyword）
+    (r.params||[]).forEach(name=>{
+      const v = params_get(name);
+      if(v !== null && v !== '') qs.push(encodeURIComponent(name)+'='+encodeURIComponent(v));
+      else if(r.paramDefaults && r.paramDefaults[name] !== undefined) qs.push(encodeURIComponent(name)+'='+encodeURIComponent(r.paramDefaults[name]));
+    });
+    return { rule: r, action: actions[i], qs: qs.join('&') };
+  }
+  return null;
+}
+
+/** 当前请求的参数（供 helperEndpoint 读 query 变量用） */
+let _curParams = null;
+function params_get(name){
+  return (_curParams && _curParams[name] !== undefined) ? String(_curParams[name]) : null;
+}
+
 /** 前端请求路径：规则里 frontPath 优先（前端路径与上游路径可能不同，
  *  如 pixiv 的前端是 /api/home、上游是 /ranking.php）。
  *  没有 frontPath 时回落到 path —— 兼容只有单一 path 的源（如 manwaxu）。 */
@@ -417,6 +470,21 @@ function frontPathOf(action, fallback){
 }
 
 async function apiGet(path, params){
+  _curParams = params || null;
+
+  /* 「本机 helper」开启 + 当前源走 helper → 浏览器直连 helper，不经代理。
+     理由见上面 helperEndpoint 的注释：代理在 Vercel，连不到用户的本机。 */
+  if(state.localHelper && isHelperSource()){
+    const ep = helperEndpoint(path);
+    if(ep){
+      try{ return await helperDirect(ep, path); }
+      catch(e){
+        console.warn('[helper 直连失败，回退代理]', e.message);
+        showReaderToast('本机 helper 连不上，已回退代理（' + e.message + '）', true);
+      }
+    }
+  }
+
   const url = buildUrl(path, params);
   const r = await fetch(url, {cache:'no-store'});
   if(!r.ok) throw new Error('HTTP ' + r.status + ' @ ' + path);
@@ -425,7 +493,34 @@ async function apiGet(path, params){
   return j && j.data !== undefined ? j.data : j;
 }
 
-/** 把上游返回的图片绝对地址转成走代理的相对路径（带 src，避免多源串图） */
+/** 直连本机 helper 取数据 */
+async function helperDirect(ep, path){
+  const src = BOOK_SOURCES;
+  // 首页多栏目：helper 的 /list 一次只接一个 path，逐个取再组装
+  if(ep.action === 'home' && src.homeMulti && src.homeMulti.length){
+    const out = {};
+    const results = await Promise.all(src.homeMulti.map(async m=>{
+      const u = LOCAL_HELPER + ep.rule.path + '?path=' + encodeURIComponent(m.path);
+      const r = await fetch(u, {cache:'no-store'});
+      if(!r.ok) throw new Error('helper HTTP ' + r.status);
+      const j = await r.json();
+      return [m.key, (j && j.data && (j.data.comicList || j.data.list)) || []];
+    }));
+    results.forEach(([k,v])=>{ out[k] = v; });
+    out._helper = { ok:true, helper:LOCAL_HELPER, direct:true };
+    return out;
+  }
+  const u = LOCAL_HELPER + ep.rule.path + (ep.qs ? '?' + ep.qs : '');
+  const r = await fetch(u, {cache:'no-store'});
+  if(!r.ok) throw new Error('helper HTTP ' + r.status);
+  const j = await r.json();
+  if(j && j.code !== undefined && j.code !== 200) throw new Error('helper code ' + j.code);
+  return j && j.data !== undefined ? j.data : j;
+}
+
+/** 把上游返回的图片绝对地址转成走代理的相对路径（带 src，避免多源串图）
+ *  18comic 的图片要经 helper 做切片还原：开关开启时改为直连本机 helper，
+ *  因为还原逻辑在 helper 里，而代理连不到用户本机。 */
 function toProxyPath(u, orig){
   if(!u) return '';
   let p = u;
@@ -435,6 +530,15 @@ function toProxyPath(u, orig){
     let op = orig;
     if(/^https?:\/\//i.test(orig)){ try{ op = new URL(orig).pathname; }catch(e){ op = orig.replace(/^https?:\/\/[^/]+/,''); } }
     if(op) p = op;
+  }
+  // 18comic 图片：直连 helper 的 /img（取回 + 切片还原）
+  if(state.localHelper && isHelperSource()){
+    const m = String(p).match(/^\/media\/(?:photos|albums|videos)\/(?:tmb\/)?(\d+)\/([^/?#]+)/);
+    if(m){
+      const book = m[1], img = (m[2]||'').replace(/\.[a-z0-9]+$/i,'');
+      return LOCAL_HELPER + '/img?url=' + encodeURIComponent((BOOK_SOURCES.baseUrl||'') + p) +
+             '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
+    }
   }
   return PROXY + encodeURIComponent(p) + '&src=' + encodeURIComponent(SRC_KEY) + helperQS();
 }
@@ -1640,7 +1744,7 @@ function setLocalHelper(on){
   saveReaderPrefs();
   applyLocalHelperUI();
   if(state.localHelper){
-    showReaderToast('已开启本机 helper：请确认本机 helper.py 正在运行（127.0.0.1:8765）', true);
+    showReaderToast('已开启本机 helper：这台设备将直连 127.0.0.1:8765，请确认 helper.py 在跑', true);
   } else {
     showReaderToast('已关闭本机 helper', true);
   }
