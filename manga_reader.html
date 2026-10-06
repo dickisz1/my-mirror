@@ -256,6 +256,12 @@ body.zoomed{overflow:hidden}
         <button id="tst-on"  onclick="setShowToast(true)">显示「第 N 张」</button>
         <button id="tst-off" onclick="setShowToast(false)">不显示</button>
       </div>
+      <div class="row">
+        <label>本机 helper</label>
+        <button id="lh-on"  onclick="setLocalHelper(true)">开启</button>
+        <button id="lh-off" onclick="setLocalHelper(false)">关闭</button>
+        <span style="color:var(--mut);font-size:11px">仅 18comic 源用：把请求转发到<b>你这台电脑</b>的 127.0.0.1:8765（需先在本机启动 helper.py）</span>
+      </div>
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
@@ -288,6 +294,11 @@ body.zoomed{overflow:hidden}
  * ============================================================ */
 const PROXY = '/api/proxy?p=';
 const DEFAULT_SRC_KEY = 'manwaxu';
+/* 「本机 helper」开关：网页在线上（Vercel），但 18comic 的 helper 跑在你自己电脑上。
+   浏览器访问不到你本机的 127.0.0.1，所以开启后请求会带上 &helper=http://127.0.0.1:8765，
+   由代理端转发（代理只对 loopback 地址放行这个覆盖，见 proxy.js）。
+   这样任何设备打开线上站点，都能用你自己机器上的 helper。 */
+const LOCAL_HELPER = 'http://127.0.0.1:8765';
 
 const BOOK_SOURCES_DEFAULT = {
   key: 'manwaxu',
@@ -386,7 +397,12 @@ function buildUrl(path, params){
     });
     qs = parts.join('&');
   }
-  return PROXY + encodeURIComponent(path) + (qs ? '&' + qs : '') + '&src=' + encodeURIComponent(SRC_KEY);
+  return PROXY + encodeURIComponent(path) + (qs ? '&' + qs : '') + '&src=' + encodeURIComponent(SRC_KEY) + helperQS();
+}
+
+/** 「本机 helper」开关开启时，给每个请求附加 helper 地址（代理端按源决定是否用） */
+function helperQS(){
+  return state.localHelper ? '&helper=' + encodeURIComponent(LOCAL_HELPER) : '';
 }
 
 /** 前端请求路径：规则里 frontPath 优先（前端路径与上游路径可能不同，
@@ -420,7 +436,7 @@ function toProxyPath(u, orig){
     if(/^https?:\/\//i.test(orig)){ try{ op = new URL(orig).pathname; }catch(e){ op = orig.replace(/^https?:\/\/[^/]+/,''); } }
     if(op) p = op;
   }
-  return PROXY + encodeURIComponent(p) + '&src=' + encodeURIComponent(SRC_KEY);
+  return PROXY + encodeURIComponent(p) + '&src=' + encodeURIComponent(SRC_KEY) + helperQS();
 }
 
 /* ============================================================
@@ -428,6 +444,7 @@ function toProxyPath(u, orig){
  * ============================================================ */
 const state = {
   view:'home',
+  localHelper:false, // 「本机 helper」开关：给 18comic 请求附加 &helper=，代理端转发到本机 8765
   comic:null,        // 详情
   chapters:[],       // 章节列表
   chapIdx:0,
@@ -1553,6 +1570,7 @@ function loadReaderPrefs(){
     if(typeof p.autoDwell === 'number') state.autoDwell = p.autoDwell;
     if(typeof p.showToast === 'boolean') state.showToast = p.showToast;
     if(typeof p.srcKey === 'string' && p.srcKey) SRC_KEY = p.srcKey;   // 记住上次用的书源
+    if(typeof p.localHelper === 'boolean') state.localHelper = p.localHelper;  // 记住本机 helper 开关
   }catch(e){}
   // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
   if(state.imgWidth === 'full'){ state.imgWidth = 'custom'; state.widthPct = 100; }
@@ -1560,9 +1578,10 @@ function loadReaderPrefs(){
   applyBrightness();
   applyAutoSpeedUI();
   applyAutoStepUI();
+  applyLocalHelperUI();
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast, srcKey:SRC_KEY})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast, srcKey:SRC_KEY, localHelper:state.localHelper})); }catch(e){}
 }
 
 /* ---------- 自动翻张：模式 / 停留 / 提示开关 ---------- */
@@ -1610,6 +1629,28 @@ function toggleReaderTools(){
   // 面板开着时取消待执行的隐藏（面板在顶栏下方，鼠标要移出去操作它）
   if(p.classList.contains('on')){ cancelTopbarHide(); showTopbar(); }
   else scheduleTopbarHide();
+}
+
+/* ---------- 本机 helper 开关（18comic 专用） ---------- */
+/** 开启后，18comic 的请求会带 &helper=http://127.0.0.1:8765，
+    代理端（仅对 loopback 地址放行）转发到你自己电脑上跑的 helper.py。
+    网页在线上、helper 在本机，这是唯一能让两者接通的路径。 */
+function setLocalHelper(on){
+  state.localHelper = !!on;
+  saveReaderPrefs();
+  applyLocalHelperUI();
+  if(state.localHelper){
+    showReaderToast('已开启本机 helper：请确认本机 helper.py 正在运行（127.0.0.1:8765）', true);
+  } else {
+    showReaderToast('已关闭本机 helper', true);
+  }
+  // 数据可能因此变得可用/不可用，重载当前视图
+  if(SRC_KEY === 'comic18') navigate(state.view === 'reader' ? 'home' : state.view);
+}
+function applyLocalHelperUI(){
+  const on = document.getElementById('lh-on'), off = document.getElementById('lh-off');
+  if(on)  on.classList.toggle('active', state.localHelper);
+  if(off) off.classList.toggle('active', !state.localHelper);
 }
 
 /** 图片宽度：预设模式 fit（适应宽度，800px 上限）/ orig（原始尺寸） */

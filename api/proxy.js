@@ -372,6 +372,27 @@ const DEFAULT_SOURCE = 'manwaxu';
    —— A 方案（本地）→ B 方案（VPS）的切换点就是这里。 */
 const HELPER_URL = (process.env.COMIC_HELPER || 'http://127.0.0.1:8765').replace(/\/+$/, '');
 
+/** 从请求里解析 helper 地址覆盖（前端「本机 helper」开关会带 ?helper=）。
+ *  ⚠️ 只放行 loopback：否则这就是个 SSRF —— 任何人都能让我们的函数
+ *  去请求任意内网地址。允许 localhost/127.x/[::1] 是因为 helper 天然
+ *  跑在用户自己机器上（网页在线上、helper 在本机，这是唯一接通路径）。 */
+function resolveHelperUrl(query) {
+  const raw = query && query.get ? query.get('helper') : null;
+  if (!raw) return HELPER_URL;
+  let u;
+  try { u = new URL(raw); } catch (e) { return HELPER_URL; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return HELPER_URL;
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  /* ⚠️ 不能用 /^127\./ 做前缀匹配：`127.0.0.1.evil.com` 也满足，
+     那是真实的 SSRF 绕过。必须校验是**完整的 IPv4 且四段都在范围内**。 */
+  const isLoopback =
+    h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1' ||
+    /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(h) &&
+      h.split('.').slice(1).every(n => Number(n) <= 255);
+  if (!isLoopback) return HELPER_URL;
+  return (u.origin + (u.pathname === '/' ? '' : u.pathname)).replace(/\/+$/, '');
+}
+
 /** 解析源 key；未知/缺省一律回落默认源（保证旧链接与旧缓存可用） */
 function resolveSource(key) {
   if (key && Object.prototype.hasOwnProperty.call(SOURCES, key)) return SOURCES[key];
@@ -718,6 +739,7 @@ function serveSources(res) {
 /** 走 helper 的数据请求（18comic：需过 CF 挑战） */
 async function serveDataViaHelper(src, action, rule, target, query, req, res) {
   const vars = extractVars(rule, target, query);
+  const HURL = resolveHelperUrl(query);          // 前端可带 ?helper=（仅 loopback 放行）
   /* helper 首次抓取要过盾 ~30s；首页要连抓 6 个栏目，
      所以给 helper 的请求单独的、宽松的超时（与源的 timeout 分开）。 */
   const HELPER_TIMEOUT = Number(process.env.COMIC_HELPER_TIMEOUT || 240000);
@@ -728,7 +750,7 @@ async function serveDataViaHelper(src, action, rule, target, query, req, res) {
   if (action === 'home' && src.homeMulti && src.homeMulti.length) {
     try {
       const results = await Promise.all(src.homeMulti.map(async m => {
-        const up = HELPER_URL + '/list?path=' + encodeURIComponent(m.path);
+        const up = HURL + '/list?path=' + encodeURIComponent(m.path);
         try {
           const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
           /* helper 可能"响应了但报错"（返回 502 + JSON error）。
@@ -759,16 +781,16 @@ async function serveDataViaHelper(src, action, rule, target, query, req, res) {
         return res.status(502).json({
           code: 502,
           error: 'helper 不可达',
-          helper: HELPER_URL,
+          helper: HURL,
           source: src.name,
           failed: failed.map(f => ({ path: f.path, err: f.err })),
-          hint: '18comic 源需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HELPER_URL +
-                ' 运行；线上需把环境变量 COMIC_HELPER 指向墙外 VPS。'
+          hint: '18comic 源需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HURL +
+                ' 运行；线上需把环境变量 COMIC_HELPER 指向墙外 VPS，或在前端「设置 → 本机 helper」开启并确保本机 helper.py 在跑。'
         });
       }
 
       /* 部分失败 → 200，但带 _helper 标记，前端可据此提示"部分栏目加载失败" */
-      data._helper = { ok: failed.length === 0, helper: HELPER_URL };
+      data._helper = { ok: failed.length === 0, helper: HURL };
       if (failed.length) {
         data._helper.failed = failed.map(f => ({ path: f.path, err: f.err }));
       }
@@ -790,7 +812,7 @@ async function serveDataViaHelper(src, action, rule, target, query, req, res) {
      2) rule.vars 从**路径**提取的（如 /api/comic/123 → id=123）
      前端把 id 放在路径里，不是 query，所以必须把 vars 也带过去。 */
   const q = buildUpstreamQuery(rule, query, vars);
-  const up = HELPER_URL + fillPath(rule.path, vars) + (q ? '?' + q : '');
+  const up = HURL + fillPath(rule.path, vars) + (q ? '?' + q : '');
   try {
     const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
     setCors(res);
@@ -801,7 +823,8 @@ async function serveDataViaHelper(src, action, rule, target, query, req, res) {
     setCors(res);
     return res.status(502).json({
       error: err.message, rule: action, target: up, source: src.name,
-      hint: '18comic 需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HELPER_URL + ' 运行'
+      hint: '18comic 需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HURL + ' 运行；' +
+            '线上可开启前端「设置 → 本机 helper」并确保本机 helper.py 在跑。'
     });
   }
 }
@@ -816,7 +839,10 @@ async function serveImageViaHelper(src, target, req, res) {
     book = m[1];
     img = (m[2] || '').replace(/\.[a-z0-9]+$/i, '');
   }
-  const up = HELPER_URL + '/img?url=' + encodeURIComponent(src.baseUrl + target) +
+  /* 图片请求也要认前端的「本机 helper」开关：从 req.url 解析 ?helper= */
+  let HURL = HELPER_URL;
+  try { HURL = resolveHelperUrl(new URL(req.url, 'https://' + (req.headers.host || 'localhost')).searchParams); } catch (e) {}
+  const up = HURL + '/img?url=' + encodeURIComponent(src.baseUrl + target) +
              '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
   try {
     const r = await fetchRaw(up, { Accept: '*/*' }, src.timeout);
@@ -1014,10 +1040,11 @@ module.exports = async function handler(req, res) {
   let target = sp.get('p') || pathname;
   if (target.charAt(0) !== '/') target = '/' + target;
 
-  // 转发时剔除内部参数（p 与 src 都不透传给上游）
+  // 转发时剔除内部参数（p / src / helper 都不透传给上游）
   const rest = new URLSearchParams(sp);
   rest.delete('p');
   rest.delete('src');
+  rest.delete('helper');
   const query = rest;
 
   /* --- 第二步：先返回前端界面 --- */

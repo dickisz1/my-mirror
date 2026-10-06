@@ -48,8 +48,12 @@
 
 ## 书源规则表
 
-权威副本在 `api/proxy.js` 的 `BOOK_SOURCES`，前端启动时通过 `/api/proxy?p=/api/source/rules` 拉取；
-拉不到则退回 `manga_reader.html` 内联的同一份默认值。阅读器顶栏「🔧 书源规则」可实时查看当前生效的规则。
+权威副本在 `api/proxy.js` 的 `SOURCES` 注册表，前端启动时通过 `/api/proxy?p=/api/source/rules&src=<key>` 按源拉取；
+拉不到则退回 `manga_reader.html` 内联的默认值。阅读器顶栏「🔧 书源规则」可实时查看当前生效的规则。
+
+**三个源**：`manwaxu`（默认，AES 加密图 + 4 域名 CDN 容灾）、`pixiv`（明文图 + Referer 防盗链，单话）、`comic18`（Cloudflare 盾 + 图片切片还原，**需 helper 进程**）。
+
+`manwaxu` 的动作表：
 
 | 动作 | 目标路径 | 参数 |
 |---|---|---|
@@ -72,22 +76,34 @@
 
 只需要改书源配置，不用动整个流程：
 
-1. 在 `api/proxy.js` 的 `BOOK_SOURCES.rules` 里加一条规则（路径模板 + 允许参数 + 匹配正则）；
+1. 在 `api/proxy.js` 的 `SOURCES` 里加一个源（`rules` + `imageRule` + 可选的 `adapt`/`homeSections`）；
 2. 图片源改 `imageCdn` 数组，加解密方式改 `decrypt` 段；
-3. 前端如需新入口，在 `manga_reader.html` 的 `BOOK_SOURCES_DEFAULT` 同步一份默认值即可。
+3. 前端**无需改动**——源列表和栏目都由代理端下发。
+
+> `comic18` 这类有 Cloudflare 盾的源，整源走 `viaHelper: true`，由 helper 进程承担取数。
 
 ## 部署
 
-1. Fork 本仓库
-2. 在 Vercel 导入（[一键克隆](https://vercel.com/new/clone?repository-url=https://github.com/dickisz1/manga-reader)）
-3. 环境变量：无需配置
-4. 部署完成，访问根路径即进入阅读器
+已接入 Vercel Git 集成，**push 到 `main` 即自动部署**。
+
+环境变量（可选）：`COMIC_HELPER` —— 指定 18comic 的 helper 地址，默认 `http://127.0.0.1:8765`。
+线上要真正能用 18comic，需把它指向一台墙外 VPS。
 
 `vercel.json` 已声明 `functions.includeFiles: manga_reader.html`，
 确保 `proxy.js` 在运行时能读到前端文件并作为「第二步」返回。
 
 ## 注意事项
 
-- 数据来源：manwaxu.cc；图片来源：见备用 CDN 规则
+- 数据来源：manwaxu.cc / pixiv.net / 18comic.vip（按所选书源）
 - 代理只放行书源规则表内的路径，未命中规则的请求返回 404（避免成为任意转发器）
+- `?helper=` 参数**只放行 loopback 地址**（localhost / 127.x / [::1]），防 SSRF
 - 阅读进度仅存本地 `localStorage`，不存储任何用户数据
+
+## 文档
+
+| 文件 | 给谁看 |
+|---|---|
+| `使用说明.md` | **使用者**——怎么用、快捷键、常见问题 |
+| `README.md`（本文） | 项目概览、部署 |
+| `AGENTS.md` | 下一个 AI 会话——编码契约、不可破坏的约定 |
+| `docs/architecture.md` | 架构、数据流、风险清单 |
