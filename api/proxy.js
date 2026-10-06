@@ -735,6 +735,11 @@ function serveRules(src, res) {
     delete r.match;                       // 保留原契约：match 不出现在响应里
     out.rules[k] = r;
   });
+  /* imageRule.match 同理：前端要判断「这张图是否该直连 helper」 */
+  if (out.imageRule && src.imageRule.match instanceof RegExp) {
+    out.imageRule = Object.assign({}, src.imageRule, { matchStr: src.imageRule.match.source });
+    delete out.imageRule.match;
+  }
   return res.status(200).send(JSON.stringify(out));
 }
 

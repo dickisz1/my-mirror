@@ -532,15 +532,25 @@ function toProxyPath(u, orig){
     if(op) p = op;
   }
   // 18comic 图片：直连 helper 的 /img（取回 + 切片还原）
-  if(state.localHelper && isHelperSource()){
+  // 用源的 imageRule 判定，而不是硬编码 photos/albums 形状 ——
+  // 封面是 /media/albums/{id}_3x4.jpg（数字后是下划线不是斜杠），
+  // 硬编码正则会漏掉封面，导致「正文正常、封面全裂」。
+  if(state.localHelper && isHelperSource() && isHelperImage(p)){
     const m = String(p).match(/^\/media\/(?:photos|albums|videos)\/(?:tmb\/)?(\d+)\/([^/?#]+)/);
-    if(m){
-      const book = m[1], img = (m[2]||'').replace(/\.[a-z0-9]+$/i,'');
-      return LOCAL_HELPER + '/img?url=' + encodeURIComponent((BOOK_SOURCES.baseUrl||'') + p) +
-             '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
-    }
+    const book = m ? m[1] : '';
+    const img  = m ? (m[2]||'').replace(/\.[a-z0-9]+$/i,'') : '';
+    return LOCAL_HELPER + '/img?url=' + encodeURIComponent((BOOK_SOURCES.baseUrl||'') + p) +
+           '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
   }
   return PROXY + encodeURIComponent(p) + '&src=' + encodeURIComponent(SRC_KEY) + helperQS();
+}
+
+/** 该图片路径是否属于当前 helper 源的 imageRule（用 matchStr 复原正则） */
+function isHelperImage(p){
+  const ir = BOOK_SOURCES && BOOK_SOURCES.imageRule;
+  if(!ir || !ir.helper) return false;
+  if(!ir.matchStr) return true;          // 源声明走 helper 但没给正则 → 一律直连
+  try{ return new RegExp(ir.matchStr).test(String(p)); }catch(e){ return false; }
 }
 
 /* ============================================================
