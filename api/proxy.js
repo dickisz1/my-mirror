@@ -858,7 +858,15 @@ async function serveImageViaHelper(src, target, req, res) {
   /* 图片请求也要认前端的「本机 helper」开关：从 req.url 解析 ?helper= */
   let HURL = HELPER_URL;
   try { HURL = resolveHelperUrl(new URL(req.url, 'https://' + (req.headers.host || 'localhost')).searchParams); } catch (e) {}
-  const up = HURL + '/img?url=' + encodeURIComponent(src.baseUrl + target) +
+  /* ⚠️ 取图必须用 CDN 主机，不能用 src.baseUrl（主域名）。
+     实测：18comic.vip/media/... → 403；cdn-msp*.18comic.vip/media/... → 200。
+     上游的 ?host= 由前端带上（图片列表返回的绝对地址里的主机）。 */
+  let imgBase = src.baseUrl;
+  try {
+    const hq = new URL(req.url, 'https://' + (req.headers.host || 'localhost')).searchParams.get('host');
+    if (hq && /^https?:\/\//i.test(hq)) imgBase = hq.replace(/\/+$/, '');
+  } catch (e) {}
+  const up = HURL + '/img?url=' + encodeURIComponent(imgBase + target) +
              '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
   try {
     const r = await fetchRaw(up, { Accept: '*/*' }, src.timeout);
@@ -1056,11 +1064,12 @@ module.exports = async function handler(req, res) {
   let target = sp.get('p') || pathname;
   if (target.charAt(0) !== '/') target = '/' + target;
 
-  // 转发时剔除内部参数（p / src / helper 都不透传给上游）
+  // 转发时剔除内部参数（p / src / helper / host 都不透传给上游）
   const rest = new URLSearchParams(sp);
   rest.delete('p');
   rest.delete('src');
   rest.delete('helper');
+  rest.delete('host');
   const query = rest;
 
   /* --- 第二步：先返回前端界面 --- */
