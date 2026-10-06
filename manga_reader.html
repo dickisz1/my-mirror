@@ -150,6 +150,9 @@ body.zoomed{overflow:hidden}
     <button id="btnHome" class="active" onclick="navigate('home')">首页</button>
     <button id="btnCategory" onclick="navigate('category')">分类</button>
     <button id="btnSearch" onclick="navigate('search')">搜索</button>
+    <!-- 本机 helper 开关（顶栏）：18comic 没它取不到数，所以首页就要够得到 -->
+    <button id="btnLocalHelper" onclick="toggleLocalHelperFromBar()" style="display:none"
+            title="18comic 需要本机 helper 进程">🔌 本机 helper</button>
   </nav>
 </header>
 
@@ -366,7 +369,12 @@ async function switchSource(key){
   AUTOSCROLL.anchorPos = null;
   renderSourceSelect();
   await loadRules();
+  applyLocalHelperUI();
   showReaderToast('已切换书源: ' + BOOK_SOURCES.name, true);
+  // helper 源且开关没开 → 首页必然 502，直接提示怎么解决（别让用户对着报错发呆）
+  if(isHelperSource() && !state.localHelper){
+    showReaderToast('18comic 需要本机 helper：请在本机运行 helper.py，然后点顶栏「开启本机 helper」', true);
+  }
   navigate('home');
 }
 
@@ -689,8 +697,34 @@ async function renderHome(){
     };
     secs.forEach(s=>fill(s.grid, pick(s.key)));
   }catch(e){
-    grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML='<div class="empty-state err">取数失败: '+esc(e.message)+'</div>'; });
+    grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML=errBlock(e.message); });
   }
+}
+
+/** 首页/栏目取数失败时的错误块。
+ *  ⚠️ 关键可用性：18comic 的「本机 helper」开关原先只在**阅读器工具栏**里，
+ *  而 helper 没开时首页就 502、没东西可点、进不了阅读器 —— 死锁。
+ *  所以错误块里必须直接给开关，并说明原因。 */
+function errBlock(msg, opts){
+  opts = opts || {};
+  const needHelper = isHelperSource() && !state.localHelper;
+  let html = '<div class="empty-state err">取数失败: ' + esc(msg);
+  if(needHelper){
+    html += '<div style="margin-top:10px;font-size:12px;line-height:1.6;color:var(--mut)">'
+          +   '当前书源是 <b>18comic</b>，它需要 helper 进程（过 Cloudflare）。<br>'
+          +   'helper 跑在<b>你这台电脑</b>上，所以要让浏览器直连它 —— 开启下面的开关。'
+          + '</div>'
+          + '<div style="margin-top:10px">'
+          +   '<button onclick="setLocalHelper(true)" style="padding:6px 16px;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:4px;cursor:pointer">'
+          +     '开启本机 helper</button> '
+          +   '<span style="color:var(--mut);font-size:11px">需先在本机运行 helper.py（127.0.0.1:8765）</span>'
+          + '</div>';
+  } else if(isHelperSource() && state.localHelper){
+    html += '<div style="margin-top:8px;font-size:12px;color:var(--mut)">'
+          +   '开关已开，但连不上 helper。确认 helper.py 在跑：<code>curl http://127.0.0.1:8765/health</code></div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 /* ============================================================
@@ -722,7 +756,7 @@ async function loadCategory(reset){
     document.getElementById('loadMore').style.display =
       (state.homePage * 12 < state.homeTotal) ? 'block' : 'none';
   }catch(e){
-    if(reset) grid.innerHTML = '<div class="empty-state err">取数失败: '+esc(e.message)+'</div>';
+    if(reset) grid.innerHTML = errBlock(e.message);
   }
 }
 function loadMoreCategory(){ state.homePage++; loadCategory(false); }
@@ -786,7 +820,7 @@ async function openDetail(id){
           </div>`).join('')
       : '<div class="empty-state">无章节</div>';
   }catch(e){
-    document.getElementById('chapterList').innerHTML = '<div class="empty-state err">章节取数失败: '+esc(e.message)+'</div>';
+    document.getElementById('chapterList').innerHTML = errBlock('章节 ' + e.message);
   }
 }
 
@@ -834,7 +868,7 @@ async function openChapter(idx){
     }
     saveHistory();
   }catch(e){
-    area.innerHTML = '<div class="empty-state err">图片列表取数失败: '+esc(e.message)+'</div>';
+    area.innerHTML = errBlock('图片列表 ' + e.message);
   }
 }
 
@@ -1770,12 +1804,30 @@ function setLocalHelper(on){
     showReaderToast('已关闭本机 helper', true);
   }
   // 数据可能因此变得可用/不可用，重载当前视图
-  if(SRC_KEY === 'comic18') navigate(state.view === 'reader' ? 'home' : state.view);
+  if(SRC_KEY === 'comic18'){
+    // 阅读器里重载回首页（当前章节的数据可能已失效）；
+    // 其它视图原地重渲染即可 —— 注意要在 home 也能生效，否则
+    // 「首页 502 → 点开关」时点了没反应，死锁依旧。
+    if(state.view === 'reader') navigate('home');
+    else navigate(state.view || 'home');
+  }
 }
 function applyLocalHelperUI(){
   const on = document.getElementById('lh-on'), off = document.getElementById('lh-off');
   if(on)  on.classList.toggle('active', state.localHelper);
   if(off) off.classList.toggle('active', !state.localHelper);
+  // 顶栏按钮：只在 helper 源下显示，并反映开关状态
+  const bar = document.getElementById('btnLocalHelper');
+  if(bar){
+    bar.style.display = isHelperSource() ? '' : 'none';
+    bar.classList.toggle('active', !!state.localHelper);
+    bar.textContent = (state.localHelper ? '🔌 本机 helper 已开' : '🔌 开启本机 helper');
+  }
+}
+
+/** 顶栏的 helper 开关：首页就能点，不必先进阅读器（否则 502 时进不去 → 死锁） */
+function toggleLocalHelperFromBar(){
+  setLocalHelper(!state.localHelper);
 }
 
 /** 图片宽度：预设模式 fit（适应宽度，800px 上限）/ orig（原始尺寸） */
@@ -1998,6 +2050,7 @@ document.addEventListener('keydown', e=>{
   loadReaderPrefs();     // 先应用显示设置（宽度/亮度/速度/书源），再渲染
   await loadSourceList();
   await loadRules();
+  applyLocalHelperUI();  // 顶栏 helper 按钮要反映「上次记的书源 + 开关状态」
   navigate('home');
 })();
 
