@@ -259,10 +259,118 @@ const SOURCES = {
       decrypt: false,
       host: 'https://i.pximg.net'
     }
+  },
+
+  /* ---------------- 源 3：18comic（CF 挑战 + 图片切片还原，经 helper） ---------------- */
+  comic18: {
+    key: 'comic18',
+    name: '18comic',
+    version: '1.0.0',
+    baseUrl: 'https://18comic.vip',
+    referer: 'https://18comic.vip/',
+    timeout: 30000,                 // 首次抓取需过盾 ~30s
+    userAgent: UA,
+    imageCdn: [],
+    decrypt: { enabled: false },    // 切片还原在 helper 里做，不是加密
+
+    /* 关键：整源走 helper 转发（见 handler 的 helper 分支）。
+       path 是 helper 的相对路径，params 是 helper 的参数名。 */
+    viaHelper: true,
+
+    rules: {
+      home: {
+        desc: '列表',
+        frontPath: '/api/home',
+        path: '/list',
+        params: ['path'],
+        paramDefaults: { path: '/albums' },
+        match: /^\/api\/home$/
+      },
+      search: {
+        desc: '搜索',
+        frontPath: '/api/search',
+        path: '/search',
+        params: ['keyword'],
+        match: /^\/api\/search$/
+      },
+      detail: {
+        desc: '作品详情',
+        frontPath: '/api/comic/',
+        path: '/detail',
+        params: ['id'],
+        match: /^\/api\/comic\/(\d+)$/,
+        vars: { id: 1 }
+      },
+      chapters: {
+        desc: '章节列表',
+        frontPath: '/api/comic/',
+        path: '/chapters',
+        params: ['id'],
+        match: /^\/api\/comic\/(\d+)\/chapters$/,
+        vars: { id: 1 }
+      },
+      chapInfo: {
+        desc: '章节信息',
+        frontPath: '/api/comic/chapter/info/',
+        path: '/detail',
+        params: ['id'],
+        match: /^\/api\/comic\/chapter\/info\/(\d+)$/,
+        vars: { id: 1 }
+      },
+      images: {
+        desc: '图片列表',
+        frontPath: '/api/comic/image/',
+        path: '/images',
+        params: ['cid'],
+        match: /^\/api\/comic\/image\/(\d+)$/,
+        vars: { cid: 1 }
+      },
+      announce: {
+        desc: '公告',
+        frontPath: '/api/announcements',
+        path: '/list',
+        params: ['path'],
+        paramDefaults: { path: '/albums' },
+        match: /^\/api\/announcements$/
+      }
+    },
+
+    homeSections: [
+      { grid: 'popularGrid',  title: '🔥 最新', key: 'comicList' },
+      { grid: 'latestGrid',   title: '📚 同人', key: 'doujinList' },
+      { grid: 'vipGrid',      title: '📖 单本', key: 'singleList' },
+      { grid: 'gufengGrid',   title: '🇰🇷 韩漫', key: 'hanmanList' },
+      { grid: 'xuanhuanGrid', title: '🦸 美漫', key: 'meimanList' },
+      { grid: 'xiaoyuanGrid', title: '📏 短篇', key: 'shortList' }
+    ],
+
+    /* 首页多栏目：一次前端请求 → 多次 helper 调用。
+       路径必须是真实存在的分类（实测从首页 HTML 里取到的）。
+       注意：浏览器会话是串行的，6 个栏目会累加 2-4 分钟（实测 200s 仍有
+       一个超时）。所以这里只放 2 个（首屏够用），其余靠用户点分类页加载。 */
+    homeMulti: [
+      { key: 'comicList',  path: '/albums' },
+      { key: 'doujinList', path: '/albums/doujin' }
+    ],
+
+    /* 图片：helper 的 /img 端点（取回 + 切片还原） */
+    imageRule: {
+      desc: '18comic 图片',
+      match: /^\/media\//,
+      cdn: false,
+      decrypt: false,
+      helper: true                  // 走 helper 的 /img
+    }
   }
 };
 
 const DEFAULT_SOURCE = 'manwaxu';
+
+/* 18comic 的数据/图片都要过 Cloudflare 挑战 + 图片切片还原，这两件事
+   Vercel 的 Node 函数做不到（需要真 Chrome 指纹），所以由一个 helper 进程承担。
+   本地验证时 helper 在 127.0.0.1；搬到墙外 VPS 后只需改这一个环境变量。
+   —— A 方案（本地）→ B 方案（VPS）的切换点就是这里。 */
+const HELPER_URL = (process.env.COMIC_HELPER || 'http://127.0.0.1:8765').replace(/\/+$/, '');
 
 /** 解析源 key；未知/缺省一律回落默认源（保证旧链接与旧缓存可用） */
 function resolveSource(key) {
@@ -607,8 +715,101 @@ function serveSources(res) {
     .send(JSON.stringify({ code: 200, data: sourceList(), default: DEFAULT_SOURCE }));
 }
 
+/** 走 helper 的数据请求（18comic：需过 CF 挑战） */
+async function serveDataViaHelper(src, action, rule, target, query, req, res) {
+  const vars = extractVars(rule, target, query);
+  /* helper 首次抓取要过盾 ~30s；首页要连抓 6 个栏目，
+     所以给 helper 的请求单独的、宽松的超时（与源的 timeout 分开）。 */
+  const HELPER_TIMEOUT = Number(process.env.COMIC_HELPER_TIMEOUT || 240000);
+
+  /* 首页多栏目：一次前端请求 → 多次 helper 调用。
+     并发发（helper 内部有锁会串行化，但连接建立可并行），
+     整体用 Promise.all 汇总，避免串行累加超时。 */
+  if (action === 'home' && src.homeMulti && src.homeMulti.length) {
+    try {
+      const results = await Promise.all(src.homeMulti.map(async m => {
+        const up = HELPER_URL + '/list?path=' + encodeURIComponent(m.path);
+        try {
+          const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
+          const j = JSON.parse(r.body.toString('utf8'));
+          return [m.key, (j && j.data && (j.data.comicList || j.data.list)) || []];
+        } catch (e) {
+          console.log('[proxy] helper list 失败 %s: %s', m.path, String(e.message).slice(0, 80));
+          return [m.key, []];
+        }
+      }));
+      const data = {};
+      results.forEach(([k, v]) => { data[k] = v; });
+      setCors(res);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).send(JSON.stringify({ code: 200, data: data }));
+    } catch (err) {
+      setCors(res);
+      return res.status(502).json({ error: err.message, rule: 'helper(homeMulti)',
+                                    source: src.name, helper: HELPER_URL });
+    }
+  }
+
+  /* helper 的参数来源有两处：
+     1) rule.params 里声明的（从 query 读，如 search 的 keyword）
+     2) rule.vars 从**路径**提取的（如 /api/comic/123 → id=123）
+     前端把 id 放在路径里，不是 query，所以必须把 vars 也带过去。 */
+  const q = buildUpstreamQuery(rule, query, vars);
+  const up = HELPER_URL + fillPath(rule.path, vars) + (q ? '?' + q : '');
+  try {
+    const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
+    setCors(res);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(r.status).send(r.body);
+  } catch (err) {
+    setCors(res);
+    return res.status(502).json({
+      error: err.message, rule: action, target: up, source: src.name,
+      hint: '18comic 需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HELPER_URL + ' 运行'
+    });
+  }
+}
+
+/** 走 helper 的图片（18comic：取回 + 切片还原） */
+async function serveImageViaHelper(src, target, req, res) {
+  /* target 形如 /media/photos/{book}/{img}.webp
+     还原需要 book 与 img 两个值来算段数，都从路径里取。 */
+  const m = String(target).match(/^\/media\/(?:photos|albums|videos)\/(?:tmb\/)?(\d+)\/([^/?#]+)/);
+  let book = '', img = '';
+  if (m) {
+    book = m[1];
+    img = (m[2] || '').replace(/\.[a-z0-9]+$/i, '');
+  }
+  const up = HELPER_URL + '/img?url=' + encodeURIComponent(src.baseUrl + target) +
+             '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
+  try {
+    const r = await fetchRaw(up, { Accept: '*/*' }, src.timeout);
+    if (r.status === 200 && r.body && r.body.length > 0) {
+      setCors(res);
+      res.setHeader('Content-Type', r.headers['content-type'] || 'image/webp');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('X-Source-Rule', 'image(helper)');
+      if (r.headers['x-cache']) res.setHeader('X-Helper-Cache', r.headers['x-cache']);
+      return res.status(200).send(r.body);
+    }
+    setCors(res);
+    return res.status(502).json({ error: 'helper image status ' + r.status, target: target });
+  } catch (err) {
+    setCors(res);
+    return res.status(502).json({
+      error: err.message, rule: 'image(helper)', target: target,
+      hint: 'helper 未运行？' + HELPER_URL
+    });
+  }
+}
+
 /** 第三步-A：按书源规则取数据 */
 async function serveData(src, action, rule, target, query, req, res) {
+  /* 整源走 helper 的源（18comic） */
+  if (src.viaHelper) return serveDataViaHelper(src, action, rule, target, query, req, res);
+
   const vars = extractVars(rule, target, query);
 
   /* ---- 合成章节（无章节源，如 pixiv）：先取详情拿 pageCount ---- */
@@ -715,6 +916,10 @@ async function serveData(src, action, rule, target, query, req, res) {
 /** 第三步-B：按源的图片规则取图（容灾 + 可选解密） */
 async function serveImage(src, target, req, res) {
   const ir = src.imageRule || {};
+
+  /* 走 helper 的图片（18comic：切片还原） */
+  if (ir.helper) return serveImageViaHelper(src, target, req, res);
+
   const hosts = ir.host ? [ir.host] : (src.imageCdn || []);
   const tried = [];
   let lastErr = null;

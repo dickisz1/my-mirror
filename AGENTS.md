@@ -8,12 +8,13 @@
 
 核心流程：用户打开浏览器 → 访问站点 → 看到阅读器界面 → 在界面上点漫画/选章节/往下滑 → 前端按书源规则去真实网站取数据 → 全部经代理中转 → 漫画图片正常显示。
 
-已注册两个书源（详见「书源定义」一节）：
+已注册三个书源（详见「书源定义」一节）：
 
 | key | 名称 | 数据来源 | 图片 |
 |-----|------|----------|------|
 | `manwaxu` | 漫蛙漫画（**默认源**） | manwaxu.cc | AES-256-CBC 加密，CDN 容灾链 `tu.mhttu.cc` → `mwtuwu.cc` → `tu.mwzu.cc` → `mwtusi.cc` |
 | `pixiv` | pixiv | www.pixiv.net | 明文图，固定 host `i.pximg.net`（靠 Referer 防盗链），免登录 |
+| `comic18` | 18comic | 18comic.vip | Cloudflare 盾 + 图片纵向切片还原；数据和图片都走 helper 进程（本地 A 方案 / VPS B 方案） |
 
 访问时用 `?src=<key>` 选源；**不带 `src` 一律走默认源 manwaxu**。
 
@@ -492,5 +493,4 @@ Pixiv 官方原文（pixiv.help）：
 
 | key | 名称 | 特点 |
 |-----|------|------|
-| `manwaxu` | 漫蛙漫画（默认） | AES-256-CBC 加密图 + 4 域名 CDN 容灾链；6 个首页栏目；多话 |
-| `pixiv` | pixiv | 明文图 + 固定 host `i.pximg.net`（靠 Referer 防盗链）；日/周/月三榜；免登录；**单话**（`adapt.fakeChapters`） |
+| `comic18` | 18comic | Cloudflare 盾 + 图片纵向切片还原；数据和图片都走 helper 进程（本地 A 方案 / VPS B 方案） |

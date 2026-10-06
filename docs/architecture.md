@@ -414,6 +414,8 @@ autoScrollTick(ts) 每帧：
 | CORS | 跨域请求被浏览器拦截 | 代理层统一设置 CORS 头 |
 | 部署未触发 | 仓库无 Vercel Git 集成，push 不会自动部署 | 手动 `vercel --prod`；或接入 Git 集成 |
 | 本地域名污染 | 本机 `*.vercel.app` 解析异常导致无法验证 | 用中转服务或修正 hosts |
+| helper 过盾失败 | 18comic Cloudflare 挑战变体 | helper 内部重试 + 超时兜底 |
+| helper 会话假活 | 进程在但页面不响应，fetch 卡死 | helper 内建看门狗（线程超时 + 闲置重建） |
 
 ## 分层决策验证
 
@@ -451,11 +453,14 @@ vercel login
 vercel --prod
 ```
 
-> ⚠️ 本仓库未接入 Vercel Git 集成，`git push origin main` **不会**自动部署。如需自动部署，请在 Vercel Dashboard 导入仓库并连接 Git。
+> ✅ 本仓库**已接入** Vercel Git 集成：`git push origin main` 会自动部署（deployments 记录 `creator=vercel[bot]`，部署 sha 等于提交 sha）。早前版本称"未接入 Git 集成"是过时的，已订正。
 
 ### 环境变量
 
-本项目无需配置环境变量，所有配置内嵌在代码中。
+默认无需配置。唯一可选变量是 **`COMIC_HELPER`**：`comic18` 源的数据与图片都要经 helper 进程（过 Cloudflare + 切片还原），该变量指定 helper 地址，默认 `http://127.0.0.1:8765`。
+
+- **本地（A 方案）**：helper 跑在本机，用默认值即可。
+- **线上（B 方案）**：Vercel 函数**访问不到**本机 `127.0.0.1`，必须在 Vercel 项目设置里把 `COMIC_HELPER` 指向一台墙外 VPS 上的 helper，否则线上 `comic18` 全部 502。`manwaxu` / `pixiv` 不受影响。
 
 ### 验证
 
