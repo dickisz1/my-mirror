@@ -414,6 +414,7 @@ autoScrollTick(ts) 每帧：
 | CORS | 跨域请求被浏览器拦截 | 代理层统一设置 CORS 头 |
 | 部署未触发 | 仓库无 Vercel Git 集成，push 不会自动部署 | 手动 `vercel --prod`；或接入 Git 集成 |
 | 本地域名污染 | 本机 `*.vercel.app` 解析异常导致无法验证 | 用中转服务或修正 hosts |
+| helper 不可达 | helper 未启动 / 线上未配 `COMIC_HELPER` | 首页多栏目全部失败 → **502 + 失败明细**（不返回静默空列表）；部分失败 → 200 但带 `data._helper.ok=false` + `X-Helper-Partial: 1` |
 | helper 过盾失败 | 18comic Cloudflare 挑战变体 | helper 内部重试 + 超时兜底 |
 | helper 会话假活 | 进程在但页面不响应，fetch 卡死 | helper 内建看门狗（线程超时 + 闲置重建） |
 

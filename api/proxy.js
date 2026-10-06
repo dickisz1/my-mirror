@@ -731,18 +731,52 @@ async function serveDataViaHelper(src, action, rule, target, query, req, res) {
         const up = HELPER_URL + '/list?path=' + encodeURIComponent(m.path);
         try {
           const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
+          /* helper 可能"响应了但报错"（返回 502 + JSON error）。
+             fetchRaw 只对网络错误抛异常，所以必须显式检查状态码，
+             否则 JSON.parse 成功但 j.data 为空 → 又变成静默空列表。 */
+          if (r.status !== 200) {
+            let em = 'helper HTTP ' + r.status;
+            try { const e = JSON.parse(r.body.toString('utf8')); if (e && (e.msg || e.error)) em = String(e.msg || e.error).slice(0, 140); } catch (_) {}
+            return { key: m.key, path: m.path, ok: false, err: em, list: [] };
+          }
           const j = JSON.parse(r.body.toString('utf8'));
-          return [m.key, (j && j.data && (j.data.comicList || j.data.list)) || []];
+          return { key: m.key, path: m.path, ok: true,
+                   list: (j && j.data && (j.data.comicList || j.data.list)) || [] };
         } catch (e) {
           console.log('[proxy] helper list 失败 %s: %s', m.path, String(e.message).slice(0, 80));
-          return [m.key, []];
+          return { key: m.key, path: m.path, ok: false,
+                   err: String(e.message).slice(0, 160), list: [] };
         }
       }));
+      const failed = results.filter(r => !r.ok);
       const data = {};
-      results.forEach(([k, v]) => { data[k] = v; });
+      results.forEach(r => { data[r.key] = r.list; });
+
+      /* helper 完全不可达 → 明确报错。绝不返回"静默空列表"：
+         那样前端只是显示空白，看不出是 helper 没起，最难排查。 */
+      if (failed.length === results.length) {
+        setCors(res);
+        return res.status(502).json({
+          code: 502,
+          error: 'helper 不可达',
+          helper: HELPER_URL,
+          source: src.name,
+          failed: failed.map(f => ({ path: f.path, err: f.err })),
+          hint: '18comic 源需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HELPER_URL +
+                ' 运行；线上需把环境变量 COMIC_HELPER 指向墙外 VPS。'
+        });
+      }
+
+      /* 部分失败 → 200，但带 _helper 标记，前端可据此提示"部分栏目加载失败" */
+      data._helper = { ok: failed.length === 0, helper: HELPER_URL };
+      if (failed.length) {
+        data._helper.failed = failed.map(f => ({ path: f.path, err: f.err }));
+      }
+
       setCors(res);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
+      if (failed.length) res.setHeader('X-Helper-Partial', '1');
       return res.status(200).send(JSON.stringify({ code: 200, data: data }));
     } catch (err) {
       setCors(res);
