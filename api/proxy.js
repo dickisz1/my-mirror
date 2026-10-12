@@ -1112,7 +1112,8 @@ function handleTaskStatus(req, res, taskId) {
     task_id: t.id,
     status: t.status,
     api_path: t.api_path,
-    result: t.status === 'done' ? result : null,
+    // done 和 failed 都要回传 result，否则前端看不到失败原因
+    result: (t.status === 'done' || t.status === 'failed') ? result : null,
   });
 }
 

@@ -69,13 +69,22 @@ def solve_and_fetch(task_id, api_path):
     
     log(f"启动 CloakBrowser 过盾+取数: {api_path}")
     
-    browser = launch(
-        headless=False,
-        proxy=PROXY,
-        humanize=True,
-        locale="en-US",
-        timezone="Europe/London",
-    )
+    try:
+        browser = launch(
+            headless=False,
+            proxy=PROXY,
+            humanize=True,
+            locale="en-US",
+            timezone="Europe/London",
+        )
+    except Exception as e:
+        log(f"CloakBrowser 启动失败: {e}")
+        return {
+            "task_id": task_id,
+            "api_path": api_path,
+            "status": "failed",
+            "error": f"CloakBrowser 启动失败: {e}",
+        }
     
     try:
         page = browser.new_page()
@@ -84,7 +93,8 @@ def solve_and_fetch(task_id, api_path):
         page.goto("https://18comic.vip/", wait_until="domcontentloaded", timeout=60000)
         
         passed = False
-        for i in range(60):
+        # CF 挑战耗时不稳定：实测 26s~120s+，窗口放宽到 180s
+        for i in range(90):
             title = page.title()
             if 'Just a moment' not in title and '请稍候' not in title and 'Attention Required' not in title:
                 passed = True
@@ -92,8 +102,13 @@ def solve_and_fetch(task_id, api_path):
             page.wait_for_timeout(2000)
         
         if not passed:
-            log("CF 挑战超时")
-            return None
+            log("CF 挑战超时（180s）")
+            return {
+                "task_id": task_id,
+                "api_path": api_path,
+                "status": "failed",
+                "error": "CF 挑战超时（180s）—— 代理出口可能不稳，建议重试",
+            }
         
         log(f"CF 挑战通过: {page.title()}")
         
@@ -114,11 +129,21 @@ def solve_and_fetch(task_id, api_path):
         # 检查是否还是 CF 挑战
         if 'Just a moment' in title or '请稍候' in title:
             log("取数时遇到 CF 挑战")
-            return None
+            return {
+                "task_id": task_id,
+                "api_path": api_path,
+                "status": "failed",
+                "error": "取数时遇到 CF 挑战 —— cookie 失效或出口 IP 变了",
+            }
         
         if len(content) < 1000:
             log(f"内容过短: {len(content)} 字节")
-            return None
+            return {
+                "task_id": task_id,
+                "api_path": api_path,
+                "status": "failed",
+                "error": f"内容过短: {len(content)} 字节",
+            }
         
         log(f"取数成功: {len(content)} 字节")
         
