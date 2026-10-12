@@ -1042,7 +1042,96 @@ async function serveImage(src, target, req, res) {
 }
 
 /* ============================================================
- * 五、入口
+ * 五、任务队列（短轮询版）
+ * ============================================================ */
+
+const tasks = new Map();
+const TASK_TTL = 300000; // 5 分钟过期
+
+function cleanupTasks() {
+  const now = Date.now();
+  for (const [id, t] of tasks) {
+    if (now - t.created > TASK_TTL) tasks.delete(id);
+  }
+}
+
+function createTask(apiPath) {
+  cleanupTasks();
+  const id = crypto.randomUUID();
+  tasks.set(id, {
+    id,
+    api_path: apiPath,
+    status: 'pending',
+    created: Date.now(),
+    result: null,
+  });
+  return id;
+}
+
+function handleTaskCreate(req, res, apiPath) {
+  const id = createTask(apiPath);
+  setCors(res);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ task_id: id, api_path: apiPath });
+}
+
+function handleTaskStatus(req, res, taskId) {
+  const t = tasks.get(taskId);
+  if (!t) {
+    setCors(res);
+    return res.status(404).json({ error: 'task not found', task_id: taskId });
+  }
+  cleanupTasks();
+  setCors(res);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  const result = t.result || {};
+  return res.status(200).json({
+    task_id: t.id,
+    status: t.status,
+    api_path: t.api_path,
+    result: t.status === 'done' ? result : null,
+  });
+}
+
+function handleCallback(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'method not allowed' });
+  }
+  let body = '';
+  req.on('data', c => { body += c; });
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      const id = data.task_id;
+      const t = tasks.get(id);
+      if (!t) {
+        setCors(res);
+        return res.status(404).json({ error: 'task not found', task_id: id });
+      }
+      // 存储 HTML 内容到 result
+      t.result = {
+        status: data.status,
+        title: data.title,
+        content: data.content,
+        content_length: data.content_length,
+        error: data.error,
+      };
+      t.status = data.status === 'ok' ? 'done' : 'failed';
+      t.finished = Date.now();
+      setCors(res);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.status(200).json({ ok: true });
+    } catch (e) {
+      setCors(res);
+      return res.status(400).json({ error: 'invalid JSON' });
+    }
+  });
+}
+
+/* ============================================================
+ * 六、入口
  * ============================================================ */
 module.exports = async function handler(req, res) {
   const host = req.headers.host || 'localhost';
@@ -1055,6 +1144,20 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     setCors(res);
     return res.status(204).end();
+  }
+
+  /* --- 任务队列：短轮询三个端点 --- */
+  if (pathname === '/api/proxy/task' && req.method === 'GET') {
+    const apiPath = sp.get('path') || '/albums';
+    return handleTaskCreate(req, res, apiPath);
+  }
+  if (pathname === '/api/proxy/status' && req.method === 'GET') {
+    const taskId = sp.get('task_id');
+    if (!taskId) return res.status(400).json({ error: 'task_id required' });
+    return handleTaskStatus(req, res, taskId);
+  }
+  if (pathname === '/api/proxy/callback' && req.method === 'POST') {
+    return handleCallback(req, res);
   }
 
   // 选定源：不带 src 时回落默认源（旧链接 / 旧缓存继续可用）

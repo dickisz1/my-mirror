@@ -1,1 +1,11 @@
 .vercel
+node_modules/
+nul
+test_require.js
+_e2e.js
+_local_proxy.js
+_serve.js
+_t.js
+*.log
+__pycache__/
+*.pyc
