@@ -48,8 +48,12 @@ def poll_task():
         ctx.verify_mode = ssl.CERT_NONE
         opener = urllib.request.build_opener(proxy_handler, urllib.request.HTTPSHandler(context=ctx))
         resp = opener.open(req, timeout=30)
-        data = json.loads(resp.read().decode('utf-8'))
-        return data
+        if resp.status == 204:
+            return None  # 没有待办任务
+        raw = resp.read().decode('utf-8')
+        if not raw.strip():
+            return None
+        return json.loads(raw)
     except urllib.error.HTTPError as e:
         if e.code == 204:
             return None  # 没有任务
