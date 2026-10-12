@@ -1147,16 +1147,16 @@ module.exports = async function handler(req, res) {
   }
 
   /* --- 任务队列：短轮询三个端点 --- */
-  if (pathname === '/api/proxy/task' && req.method === 'GET') {
+  if (pathname === '/task' && req.method === 'GET') {
     const apiPath = sp.get('path') || '/albums';
     return handleTaskCreate(req, res, apiPath);
   }
-  if (pathname === '/api/proxy/status' && req.method === 'GET') {
+  if (pathname === '/status' && req.method === 'GET') {
     const taskId = sp.get('task_id');
     if (!taskId) return res.status(400).json({ error: 'task_id required' });
     return handleTaskStatus(req, res, taskId);
   }
-  if (pathname === '/api/proxy/callback' && req.method === 'POST') {
+  if (pathname === '/callback' && req.method === 'POST') {
     return handleCallback(req, res);
   }
 
