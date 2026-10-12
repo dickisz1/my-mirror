@@ -63,12 +63,45 @@ def poll_task():
         log(f"claim task error: {e}")
         return None
 
+def _cf_cleared(page):
+    """真正判据：cf_clearance cookie 是否已下发（标题不可靠）"""
+    try:
+        for c in page.context.cookies():
+            if c.get('name') == 'cf_clearance' and c.get('value'):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _title_settled(page):
+    """标题既不含挑战特征、也不是导航中途的 Loading/空白"""
+    try:
+        t = (page.title() or '').strip()
+    except Exception:
+        return False
+    if not t:
+        return False
+    bad = ('Just a moment', '请稍候', 'Attention Required', 'Loading', 'about:blank')
+    return not any(b in t for b in bad)
+
+
+def _wait_cf(page, budget_s=240):
+    """等 CF 过盾：cf_clearance 下发 且 标题稳定，二者同时满足才算通过"""
+    deadline = time.time() + budget_s
+    while time.time() < deadline:
+        if _cf_cleared(page) and _title_settled(page):
+            return True
+        page.wait_for_timeout(2000)
+    return False
+
+
 def solve_and_fetch(task_id, api_path):
-    """用 CloakBrowser 过盾 + 取数"""
+    """用 CloakBrowser 过盾 + 取数（持久会话：过盾一次，后续任务复用同一 IP）"""
     from cloakbrowser import launch
-    
+
     log(f"启动 CloakBrowser 过盾+取数: {api_path}")
-    
+
     try:
         browser = launch(
             headless=False,
@@ -85,57 +118,50 @@ def solve_and_fetch(task_id, api_path):
             "status": "failed",
             "error": f"CloakBrowser 启动失败: {e}",
         }
-    
+
     try:
         page = browser.new_page()
-        
-        # 步骤 1：过盾
+
+        # 步骤 1：过盾（判据用 cf_clearance，不用标题）
         page.goto("https://18comic.vip/", wait_until="domcontentloaded", timeout=60000)
-        
-        passed = False
-        # CF 挑战耗时不稳定：实测 26s~120s+，窗口放宽到 180s
-        for i in range(90):
-            title = page.title()
-            if 'Just a moment' not in title and '请稍候' not in title and 'Attention Required' not in title:
-                passed = True
-                break
-            page.wait_for_timeout(2000)
-        
-        if not passed:
-            log("CF 挑战超时（180s）")
+
+        if not _wait_cf(page, budget_s=240):
+            log("CF 挑战超时（240s）")
             return {
                 "task_id": task_id,
                 "api_path": api_path,
                 "status": "failed",
-                "error": "CF 挑战超时（180s）—— 代理出口可能不稳，建议重试",
+                "error": "CF 挑战超时（240s）—— 代理出口不稳，建议重试",
             }
-        
-        log(f"CF 挑战通过: {page.title()}")
-        
-        # 步骤 2：取数（构造完整 URL）
+
+        log(f"CF 过盾成功（cf_clearance 已下发）: {page.title()}")
+
+        # 步骤 2：取数
         target_url = f"https://18comic.vip{api_path}"
         log(f"访问: {target_url}")
-        
+
         try:
             page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
             log(f"导航异常: {e}")
-        
-        page.wait_for_timeout(2000)
-        
+
+        # 取数后也等一次，避免读到导航中途的空白
+        _wait_cf(page, budget_s=60)
+        page.wait_for_timeout(1500)
+
         title = page.title()
         content = page.content()
-        
-        # 检查是否还是 CF 挑战
-        if 'Just a moment' in title or '请稍候' in title:
-            log("取数时遇到 CF 挑战")
+
+        # 取数后如果又撞盾，说明 cookie 没生效
+        if not _cf_cleared(page) or 'Just a moment' in title or '请稍候' in title:
+            log(f"取数时遇到 CF 挑战（title={title}）")
             return {
                 "task_id": task_id,
                 "api_path": api_path,
                 "status": "failed",
-                "error": "取数时遇到 CF 挑战 —— cookie 失效或出口 IP 变了",
+                "error": f"取数时遇到 CF 挑战（title={title}）—— cookie 失效或出口 IP 变了",
             }
-        
+
         if len(content) < 1000:
             log(f"内容过短: {len(content)} 字节")
             return {
@@ -144,9 +170,9 @@ def solve_and_fetch(task_id, api_path):
                 "status": "failed",
                 "error": f"内容过短: {len(content)} 字节",
             }
-        
+
         log(f"取数成功: {len(content)} 字节")
-        
+
         return {
             "task_id": task_id,
             "api_path": api_path,
@@ -155,7 +181,7 @@ def solve_and_fetch(task_id, api_path):
             "content": content,
             "content_length": len(content),
         }
-        
+
     finally:
         browser.close()
 

@@ -38,9 +38,9 @@ def main():
     task_id = json.loads(body)['task_id']
     print(f"    task_id = {task_id}")
 
-    # 步骤 2：轮询状态，等 worker 认领并回传
-    print(f"\n[2] 轮询任务状态（最多 120 秒）...")
-    for i in range(24):
+    # 步骤 2：轮询状态，等 worker 认领并回传（worker 过盾预算 240s，客户端给 300s）
+    print(f"\n[2] 轮询任务状态（最多 300 秒）...")
+    for i in range(60):
         time.sleep(5)
         code, body = get(f"{BASE}/status?task_id={task_id}")
         if code != 200:
