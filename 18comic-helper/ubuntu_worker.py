@@ -207,6 +207,10 @@ def post_callback(result):
             resp = opener.open(req, timeout=30)
             log(f"回调成功: {resp.status}")
             return True
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')[:300]
+            log(f"回调失败 (尝试 {attempt+1}/{MAX_RETRIES}): HTTP {e.code} {body}")
+            time.sleep(2)
         except Exception as e:
             log(f"回调失败 (尝试 {attempt+1}/{MAX_RETRIES}): {e}")
             time.sleep(2)
