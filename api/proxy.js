@@ -1045,31 +1045,101 @@ async function serveImage(src, target, req, res) {
  * 五、任务队列（短轮询版）
  * ============================================================ */
 
-const tasks = new Map();
-const TASK_TTL = 300000; // 5 分钟过期
+const TASK_TTL = 300; // 5 分钟（秒）
 
-function cleanupTasks() {
-  const now = Date.now();
-  for (const [id, t] of tasks) {
-    if (now - t.created > TASK_TTL) tasks.delete(id);
+// Vercel KV (Upstash Redis) 客户端，跨实例共享任务状态
+let kv = null;
+try {
+  const { createClient } = require('@vercel/kv');
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    kv = createClient({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
+    console.log('[proxy] KV (Redis) 已连接');
+  } else {
+    console.warn('[proxy] KV_REST_API_URL/TOKEN 未配置，回退内存模式（不跨实例）');
+  }
+} catch (e) {
+  console.warn('[proxy] @vercel/kv 不可用，回退内存模式:', e.message);
+}
+
+// 内存 fallback（仅开发/测试用）
+const memTasks = new Map();
+
+async function kvGetTask(id) {
+  if (kv) {
+    const d = await kv.get(`task:${id}`);
+    return d ? (typeof d === 'string' ? JSON.parse(d) : d) : null;
+  }
+  return memTasks.get(id) || null;
+}
+
+async function kvSetTask(task) {
+  if (kv) {
+    await kv.set(`task:${task.id}`, JSON.stringify(task), { ex: TASK_TTL });
+  } else {
+    memTasks.set(task.id, task);
   }
 }
 
-function createTask(apiPath) {
-  cleanupTasks();
+async function kvClaimPending() {
+  if (kv) {
+    // 扫描所有 task key（任务量小，scan 足够）
+    const keys = [];
+    let cursor = 0;
+    do {
+      const [next, batch] = await kv.scan(cursor, { match: 'task:*', count: 100 });
+      cursor = Number(next);
+      keys.push(...batch);
+    } while (cursor !== 0);
+
+    // 取所有 pending 任务，找最早的
+    let picked = null;
+    for (const key of keys) {
+      const d = await kv.get(key);
+      if (!d) continue;
+      const t = typeof d === 'string' ? JSON.parse(d) : d;
+      if (t.status === 'pending' && (!picked || t.created < picked.created)) {
+        picked = t;
+      }
+    }
+    return picked;
+  }
+  // 内存模式
+  let picked = null;
+  for (const t of memTasks.values()) {
+    if (t.status === 'pending' && (!picked || t.created < picked.created)) picked = t;
+  }
+  return picked;
+}
+
+async function cleanupTasks() {
+  if (!kv) {
+    const now = Date.now();
+    for (const [id, t] of memTasks) {
+      if (now - t.created > TASK_TTL * 1000) memTasks.delete(id);
+    }
+  }
+  // Redis 有 TTL，无需手动清理
+}
+
+async function createTask(apiPath) {
+  await cleanupTasks();
   const id = crypto.randomUUID();
-  tasks.set(id, {
+  const task = {
     id,
     api_path: apiPath,
     status: 'pending',
     created: Date.now(),
     result: null,
-  });
+  };
+  await kvSetTask(task);
   return id;
 }
 
-function handleTaskCreate(req, res, apiPath) {
-  const id = createTask(apiPath);
+async function handleTaskCreate(req, res, apiPath) {
+  const id = await createTask(apiPath);
   setCors(res);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
@@ -1080,30 +1150,25 @@ function handleTaskCreate(req, res, apiPath) {
  * worker 认领任务：取最早的一个 pending 任务并标记为 processing
  * 没有待办任务时返回 204，避免 worker 空转创建垃圾任务
  */
-function handleTaskClaim(req, res) {
-  cleanupTasks();
-  let picked = null;
-  for (const t of tasks.values()) {
-    if (t.status === 'pending') {
-      if (!picked || t.created < picked.created) picked = t;
-    }
-  }
+async function handleTaskClaim(req, res) {
+  await cleanupTasks();
+  const picked = await kvClaimPending();
   setCors(res);
   res.setHeader('Cache-Control', 'no-store');
   if (!picked) return res.status(204).end();
   picked.status = 'processing';
   picked.claimed = Date.now();
+  await kvSetTask(picked);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   return res.status(200).json({ task_id: picked.id, api_path: picked.api_path });
 }
 
-function handleTaskStatus(req, res, taskId) {
-  const t = tasks.get(taskId);
+async function handleTaskStatus(req, res, taskId) {
+  const t = await kvGetTask(taskId);
   if (!t) {
     setCors(res);
     return res.status(404).json({ error: 'task not found', task_id: taskId });
   }
-  cleanupTasks();
   setCors(res);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
@@ -1123,11 +1188,11 @@ function handleCallback(req, res) {
   }
   let body = '';
   req.on('data', c => { body += c; });
-  req.on('end', () => {
+  req.on('end', async () => {
     try {
       const data = JSON.parse(body);
       const id = data.task_id;
-      const t = tasks.get(id);
+      const t = await kvGetTask(id);
       if (!t) {
         setCors(res);
         return res.status(404).json({ error: 'task not found', task_id: id });
@@ -1142,6 +1207,7 @@ function handleCallback(req, res) {
       };
       t.status = data.status === 'ok' ? 'done' : 'failed';
       t.finished = Date.now();
+      await kvSetTask(t);
       setCors(res);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.status(200).json({ ok: true });

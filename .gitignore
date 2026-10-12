@@ -9,3 +9,6 @@ _t.js
 *.log
 __pycache__/
 *.pyc
+
+.vercel
+.env*
