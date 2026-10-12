@@ -1076,6 +1076,27 @@ function handleTaskCreate(req, res, apiPath) {
   return res.status(200).json({ task_id: id, api_path: apiPath });
 }
 
+/**
+ * worker 认领任务：取最早的一个 pending 任务并标记为 processing
+ * 没有待办任务时返回 204，避免 worker 空转创建垃圾任务
+ */
+function handleTaskClaim(req, res) {
+  cleanupTasks();
+  let picked = null;
+  for (const t of tasks.values()) {
+    if (t.status === 'pending') {
+      if (!picked || t.created < picked.created) picked = t;
+    }
+  }
+  setCors(res);
+  res.setHeader('Cache-Control', 'no-store');
+  if (!picked) return res.status(204).end();
+  picked.status = 'processing';
+  picked.claimed = Date.now();
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  return res.status(200).json({ task_id: picked.id, api_path: picked.api_path });
+}
+
 function handleTaskStatus(req, res, taskId) {
   const t = tasks.get(taskId);
   if (!t) {
@@ -1146,16 +1167,23 @@ module.exports = async function handler(req, res) {
     return res.status(204).end();
   }
 
-  /* --- 任务队列：短轮询三个端点 --- */
+  /* --- 任务队列：短轮询四个端点 --- */
+  // 前端：创建任务
   if (pathname === '/task' && req.method === 'GET') {
     const apiPath = sp.get('path') || '/albums';
     return handleTaskCreate(req, res, apiPath);
   }
+  // worker：认领待办任务（无任务返回 204）
+  if (pathname === '/claim' && req.method === 'GET') {
+    return handleTaskClaim(req, res);
+  }
+  // 前端：轮询任务状态
   if (pathname === '/status' && req.method === 'GET') {
     const taskId = sp.get('task_id');
     if (!taskId) return res.status(400).json({ error: 'task_id required' });
     return handleTaskStatus(req, res, taskId);
   }
+  // worker：回传结果
   if (pathname === '/callback' && req.method === 'POST') {
     return handleCallback(req, res);
   }

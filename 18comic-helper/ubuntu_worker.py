@@ -32,8 +32,8 @@ def log(msg):
     print(f"[ubuntu-worker] {ts} {msg}", flush=True)
 
 def poll_task():
-    """轮询 Vercel 获取待处理任务"""
-    url = f"{VERCEL_URL}/api/proxy/task"
+    """认领 Vercel 上的待办任务（无任务返回 None）"""
+    url = f"{VERCEL_URL}/api/proxy/claim"
     try:
         req = urllib.request.Request(url, headers={
             'User-Agent': 'ubuntu-worker/1.0',
@@ -51,12 +51,12 @@ def poll_task():
         data = json.loads(resp.read().decode('utf-8'))
         return data
     except urllib.error.HTTPError as e:
-        if e.code == 404:
+        if e.code == 204:
             return None  # 没有任务
-        log(f"poll task HTTP error: {e.code}")
+        log(f"claim task HTTP error: {e.code}")
         return None
     except Exception as e:
-        log(f"poll task error: {e}")
+        log(f"claim task error: {e}")
         return None
 
 def solve_and_fetch(task_id, api_path):
