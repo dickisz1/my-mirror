@@ -178,6 +178,7 @@ body.zoomed{overflow:hidden}
   <!-- 搜索 -->
   <div id="view-search" class="view">
     <div style="margin-bottom:16px"><input id="searchInput" type="text" placeholder="搜索漫画标题 / 作者 / 标签…" oninput="debounceSearch()"></div>
+    <div id="searchFilters" style="margin-bottom:12px"></div>
     <div class="grid" id="searchGrid"></div>
   </div>
 
@@ -473,6 +474,8 @@ const state = {
   chapters:[],       // 章节列表
   chapIdx:0,
   homeType:0,        // 分类页栏目 type
+  categoryId:0,      // comic18 分类 id（0=全部）
+  searchSort:'mr',   // comic18 搜索排序
   homePage:1,
   homeTotal:1,
   continuous:false,   // 连续阅读模式
@@ -606,13 +609,45 @@ const CAT_TABS = [
   {label:'古风', type:3}, {label:'玄幻', type:4}, {label:'校园', type:5}
 ];
 
+/* 18comic 分类 id 映射（从 /categories/filter 返回的 category.id 提取） */
+const COMIC18_CATEGORIES = [
+  { id: 1, label: '同人' },
+  { id: 2, label: '单本' },
+  { id: 3, label: '短篇' },
+  { id: 4, label: '其他' },
+  { id: 5, label: '韩漫' },
+  { id: 6, label: '美漫' },
+  { id: 7, label: '古风' },
+  { id: 8, label: '玄幻' },
+  { id: 9, label: '校园' },
+  { id: 10, label: '悬疑' },
+  { id: 11, label: '恐怖' },
+  { id: 12, label: '搞笑' }
+];
+
+/* 18comic 搜索排序选项 */
+const COMIC18_SORT_OPTIONS = [
+  { o: 'mr', label: '最新' },
+  { o: 'mv', label: '最多浏览' },
+  { o: 'mp', label: '最多图片' },
+  { o: 'tf', label: '最多收藏' }
+];
+
 function renderCategory(){
-  document.getElementById('catFilters').innerHTML = CAT_TABS.map(t=>
-    `<button class="${state.homeType===t.type?'active':''}" onclick="setCat(${t.type})">${t.label}</button>`).join('');
+  const tabs = (SRC_KEY==='comic18') ? COMIC18_CATEGORIES : CAT_TABS;
+  document.getElementById('catFilters').innerHTML = tabs.map(t=>{
+    const id = (SRC_KEY==='comic18') ? t.id : t.type;
+    const active = (SRC_KEY==='comic18') ? (state.categoryId===id) : (state.homeType===t.type);
+    return `<button class="${active?'active':''}" onclick="setCat(${id})">${t.label}</button>`;
+  }).join('');
   state.homePage = 1;
   loadCategory(true);
 }
-function setCat(t){ state.homeType=t; renderCategory(); }
+function setCat(id){
+  if(SRC_KEY==='comic18'){ state.categoryId = id; }
+  else { state.homeType = id; }
+  renderCategory();
+}
 /** 详情页 facets 渲染：根据源配置动态生成可点击元素 */
 function renderFacets(info){
   const el = document.getElementById('detailTags');
@@ -651,7 +686,9 @@ async function loadCategory(reset){
   const grid = document.getElementById('categoryGrid');
   if(reset) grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>';
   try{
-    const d = await apiGet(frontPathOf('home','/api/home'), {page:state.homePage, pageSize:12, type:state.homeType, flag:1});
+    const params = {page:state.homePage, pageSize:12, type:state.homeType, flag:1};
+    if(SRC_KEY==='comic18' && state.categoryId) params.c = state.categoryId;
+    const d = await apiGet(frontPathOf('home','/api/home'), params);
     const list = (d && (d.comicList||d.list)) || [];
     state.homeTotal = (d && d.total) || list.length;
     const html = list.map(cardHtml).join('');
@@ -670,14 +707,28 @@ function loadMoreCategory(){ state.homePage++; loadCategory(false); }
  * ============================================================ */
 let searchTimer;
 function debounceSearch(){ clearTimeout(searchTimer); searchTimer=setTimeout(renderSearch,350); }
+function setSearchSort(o){ state.searchSort=o; renderSearch(); }
+
+function renderSearchFilters(){
+  const el = document.getElementById('searchFilters');
+  if(!el) return;
+  if(SRC_KEY!=='comic18'){ el.innerHTML=''; return; }
+  el.innerHTML = '<span style="font-size:12px;color:var(--mut);margin-right:8px">排序</span>' +
+    COMIC18_SORT_OPTIONS.map(s=>
+      `<button style="margin-right:6px;padding:3px 10px;font-size:12px;border:1px solid var(--ln);background:${state.searchSort===s.o?'var(--ac)':'transparent'};color:${state.searchSort===s.o?'#fff':'var(--fg)'};border-radius:4px;cursor:pointer" onclick="setSearchSort('${s.o}')">${s.label}</button>`
+    ).join('');
+}
 
 async function renderSearch(){
+  renderSearchFilters();
   const q = document.getElementById('searchInput').value.trim();
   const grid = document.getElementById('searchGrid');
   if(!q){ grid.innerHTML='<div class="empty-state">输入关键词搜索</div>'; return; }
   grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>搜索中…</div>';
   try{
-    const d = await apiGet(frontPathOf('search','/api/search'), {keyword:q, page:1, pageSize:24});
+    const params = {keyword:q, page:1, pageSize:24};
+    if(SRC_KEY==='comic18') params.o = state.searchSort;
+    const d = await apiGet(frontPathOf('search','/api/search'), params);
     const list = (d && d.list) || [];
     grid.innerHTML = list.length
       ? list.map(it=>cardHtml({id:it.id,title:it.title,pic:it.cover||it.pic,author:it.author,tags:it.tags})).join('')
