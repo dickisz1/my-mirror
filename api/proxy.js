@@ -863,6 +863,8 @@ async function serveData(src, action, rule, target, query, req, res) {
       const vars = extractVars(rule, target, query);
       const upPath = fillPath(rule.path, vars);
       const upQuery = buildUpstreamQuery(rule, query, null);
+      // DEBUG: 确认 target/match/vars/upPath 实际值
+      console.log('[comic18-debug] target=', target, '| rule.match=', rule.match, '| vars=', JSON.stringify(vars), '| upPath=', upPath, '| upQuery=', upQuery);
       // varToQuery：把路径里的 id 作为 query 参数传给上游（如 /album?id=123）
       const extraQ = [];
       if (rule.varToQuery) {
