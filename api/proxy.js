@@ -285,10 +285,11 @@ const SOURCES = {
       albums: {
         desc: '分类列表（path 模式）',
         frontPath: '/api/albums',
-        path: '/albums',
+        path: '/albums/{category}',
         params: ['o', 't', 'page'],
         paramDefaults: { o: 'mv' },
-        match: /^\/api\/albums\/?([a-z]+)?$/
+        match: /^\/api\/albums\/?([a-z]+)?$/,
+        vars: { category: 1 }
       },
       search: {
         desc: '搜索',
