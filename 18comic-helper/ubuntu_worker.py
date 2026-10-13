@@ -24,7 +24,7 @@ import os
 # 配置
 VERCEL_URL = "https://my-mirror-three.vercel.app"
 TASK_POLL_INTERVAL = 2  # 秒
-PROXY = "http://172.21.128.1:20810"
+PROXY = "http://172.31.112.1:20810"
 MAX_RETRIES = 3
 
 def log(msg):
