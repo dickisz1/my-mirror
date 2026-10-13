@@ -325,6 +325,13 @@ const SOURCES = {
       { grid: 'popularGrid',  title: '🔥 全部', key: 'comicList' }
     ],
 
+    /* 详情页可点击维度（facets）：前端根据此配置动态渲染可点击元素 */
+    facets: [
+      { field: 'category', type: 'category', label: '分类', clickAction: 'category', clickField: 'title', idField: 'id' },
+      { field: 'tags',     type: 'tag',      label: '标签', clickAction: 'search' },
+      { field: 'author',   type: 'author',   label: '作者', clickAction: 'search' }
+    ],
+
     /* 图片：浏览器直连 CDN（ACAO:*），前端 canvas 切片还原 */
     imageRule: {
       desc: '18comic 图片（浏览器直连 CDN）',
