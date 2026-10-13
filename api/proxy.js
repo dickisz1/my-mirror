@@ -322,12 +322,7 @@ const SOURCES = {
     },
 
     homeSections: [
-      { grid: 'popularGrid',  title: '🔥 最新', key: 'comicList' },
-      { grid: 'latestGrid',   title: '📚 同人', key: 'doujinList' },
-      { grid: 'vipGrid',      title: '📖 单本', key: 'singleList' },
-      { grid: 'gufengGrid',   title: '🇰🇷 韩漫', key: 'hanmanList' },
-      { grid: 'xuanhuanGrid', title: '🦸 美漫', key: 'meimanList' },
-      { grid: 'xiaoyuanGrid', title: '📏 短篇', key: 'shortList' }
+      { grid: 'popularGrid',  title: '🔥 全部', key: 'comicList' }
     ],
 
     /* 图片：浏览器直连 CDN（ACAO:*），前端 canvas 切片还原 */
