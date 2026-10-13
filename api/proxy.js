@@ -278,8 +278,7 @@ const SOURCES = {
         desc: '列表',
         frontPath: '/api/home',
         path: '/categories/filter',
-        params: ['page', 'pageSize', 'type', 'flag'],
-        paramMap: { pageSize: 'c' },
+        params: ['page', 'pageSize', 'c', 'type', 'flag'],
         paramDefaults: { order: '', o: 'mv' },
         match: /^\/api\/home$/
       },
