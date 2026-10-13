@@ -8,8 +8,11 @@
     }
   ],
   "functions": {
-    "api/proxy.js": {
-      "includeFiles": "manga_reader.html",
+    "api/**/*.js": {
+      "includeFiles": [
+        "manga_reader.html",
+        "node_modules/@wreq-js/binding-linux-x64-gnu/**"
+      ],
       "memory": 1024,
       "maxDuration": 30
     }
