@@ -973,12 +973,27 @@ function setupContinuousLoader(){
   continuousObserver.observe(ensureSentinel());
 }
 
+/** 方案 C：限制最大显示宽度为原始分辨率，避免插值放大模糊 */
+function applyNaturalWidthLimit(el){
+  const wrap = el.closest('.imgwrap');
+  if(!wrap) return;
+  // img 用 naturalWidth，canvas 用 width
+  const naturalW = el.naturalWidth || el.width;
+  if(!naturalW || naturalW <= 0) return;
+  const containerW = wrap.clientWidth;
+  if(containerW > 0 && naturalW < containerW){
+    el.style.maxWidth = naturalW + 'px';
+    el.style.marginLeft = 'auto';
+    el.style.marginRight = 'auto';
+  }
+}
 function imgOk(img){
   img.dataset.loaded='1';
   const w = img.closest('.imgwrap'); if(w) w.classList.remove('loading');
   // 18comic 图片：CDN 返回的是切片乱序图，需要 canvas 还原
   const num = parseInt(img.dataset.num || '0', 10);
   if(num > 1) descrambleImg(img, num);
+  else applyNaturalWidthLimit(img);
 }
 function imgFail(img){
   const w = img.closest('.imgwrap');
