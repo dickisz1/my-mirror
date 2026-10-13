@@ -682,14 +682,41 @@ function facetClick(value){
   renderSearch();
 }
 
+/* 通用过滤函数：按指定字段过滤列表
+ * dimension: 字段名（如 'category', 'tags'）
+ * value: 过滤值（如 '5' 或 '校园'）
+ * 支持对象字段（如 category: {id: '5', title: '韓漫'}）和数组字段（如 tags: ['校园', '恋爱']）
+ */
+function filterByDimension(list, dimension, value) {
+  if (!value || value === '0') return list;
+  return list.filter(item => {
+    const fieldVal = item[dimension];
+    if (fieldVal == null) return false;
+    // 对象字段：匹配 id 或 title
+    if (typeof fieldVal === 'object' && !Array.isArray(fieldVal)) {
+      return String(fieldVal.id) === String(value) || fieldVal.title === value;
+    }
+    // 数组字段：检查是否包含
+    if (Array.isArray(fieldVal)) {
+      return fieldVal.some(v => String(v) === String(value) || v === value);
+    }
+    // 基本类型：直接比较
+    return String(fieldVal) === String(value);
+  });
+}
+
 async function loadCategory(reset){
   const grid = document.getElementById('categoryGrid');
   if(reset) grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>';
   try{
     const params = {page:state.homePage, pageSize:12, type:state.homeType, flag:1};
-    if(SRC_KEY==='comic18' && state.categoryId) params.c = state.categoryId;
+    // 注意：comic18 的 /categories/filter 不支持 c 参数，分类过滤在前端做
     const d = await apiGet(frontPathOf('home','/api/home'), params);
-    const list = (d && (d.comicList||d.list)) || [];
+    let list = (d && (d.comicList||d.list)) || [];
+    // 前端通用过滤：comic18 按 category.id 过滤
+    if (SRC_KEY === 'comic18' && state.categoryId) {
+      list = filterByDimension(list, 'category', String(state.categoryId));
+    }
     state.homeTotal = (d && d.total) || list.length;
     const html = list.map(cardHtml).join('');
     if(reset) grid.innerHTML = html || '<div class="empty-state">无数据</div>';

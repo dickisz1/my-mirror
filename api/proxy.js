@@ -282,15 +282,7 @@ const SOURCES = {
         paramDefaults: { o: 'mv' },
         match: /^\/api\/home$/
       },
-      albums: {
-        desc: '分类列表（path 模式）',
-        frontPath: '/api/albums',
-        path: '/albums/{category}',
-        params: ['o', 't', 'page'],
-        paramDefaults: { o: 'mv' },
-        match: /^\/api\/albums\/?([a-z]+)?$/,
-        vars: { category: 1 }
-      },
+
       search: {
         desc: '搜索',
         frontPath: '/api/search',
@@ -766,7 +758,6 @@ async function comic18Fetch(path, query, opts) {
   };
   
   const url = `https://${domain}${path}${query ? '?' + query : ''}`;
-  console.log('[comic18Fetch] url=', url, 'headers=', JSON.stringify(headers));
   const r = await fetchRaw(url, headers, 15000);
   
   if (r.status !== 200) {
@@ -866,10 +857,6 @@ async function serveData(src, action, rule, target, query, req, res) {
       const vars = extractVars(rule, target, query);
       const upPath = fillPath(rule.path, vars);
       const upQuery = buildUpstreamQuery(rule, query, null);
-      // DEBUG: 把 debug 信息写到 HTTP 响应头，最可靠的方式
-      const debugInfo = { target, ruleMatch: String(rule.match), vars, upPath, upQuery };
-      console.log('[comic18-debug]', JSON.stringify(debugInfo));
-      res.setHeader('X-Debug-Info', JSON.stringify(debugInfo));
       // varToQuery：把路径里的 id 作为 query 参数传给上游（如 /album?id=123）
       const extraQ = [];
       if (rule.varToQuery) {
@@ -881,7 +868,6 @@ async function serveData(src, action, rule, target, query, req, res) {
       }
       const allQ = [upQuery].concat(extraQ.filter(Boolean)).join('&');
       const j = await comic18Fetch(upPath, allQ);
-      j._debug = debugInfo;
 
       // images：/chapter 返回 images 数组，还需 /chapter_view_template 拿 scramble_id
       if (action === 'images' && j.data && Array.isArray(j.data.images)) {
@@ -927,6 +913,7 @@ async function serveData(src, action, rule, target, query, req, res) {
             pic: toComic18Cover(coverPath),
             author: (it.author && it.author.length ? it.author[0] : '') || '',
             tags: (it.category && it.category.title) || '',
+            category: it.category || null,  // 保留 category.id 供前端过滤
             tHits: Number(it.total_views) || 0,
             collection: 0,
             status: 1,
