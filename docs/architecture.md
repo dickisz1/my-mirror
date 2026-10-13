@@ -1,6 +1,15 @@
 # 架构说明 (docs/architecture.md)
 
-> 本文档描述**当前代码的真实架构**。此前版本曾描述"广告拦截层 + HTML 注入 + 自动阅读引擎 + DOM 沙箱 + Edge Runtime"，这些在代码中并不存在，已订正。若文档与代码冲突，以代码为准，并请同步修订本文档。
+> ⚠️ **本文档已合并至 `flowchart-complete.md`**，请使用统一版流程图文档。
+> 旧版 `architecture.md` 存在以下与代码不符之处（已在统一版中修正）：
+> - 架构图标注 Vercel Edge（实际运行时为 Node.js）
+> - 缺少 helper 进程通信流程（comic18 专用）
+> - 缺少多源请求链对比图（manwaxu / pixiv / comic18 差异）
+> - 风险清单 8 项（实际 11 项，已补充 helper SSRF、helper 会话假活、helper 过盾失败）
+> - 27 条契约（统一版扩充至 30 条，新增 SSRF 防护、`adapt.searchField`/`field` 分离、`homeSections` 驱动、`src` 不透传）
+> - 缺少 boot 真实顺序（`loadReaderPrefs → loadSourceList → loadRules → navigate`）
+>
+> 统一版 `flowchart-complete.md` 已合并本文档与 `flowchart.md` 内容，以代码真实实现为准。
 
 ## 系统架构图
 
@@ -286,6 +295,36 @@ autoScrollTick(ts) 每帧：
 - 写网络代理逻辑
 - 直接请求外部站点（必须经 proxy）
 - 存储敏感数据到 localStorage
+
+
+### 阅读进度保存时序图
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Browser
+    participant JS as JavaScript
+    participant LS as localStorage
+
+    %% Scroll save
+    User->>Browser: 滚动页面
+    Browser->>JS: scroll事件
+    JS->>JS: 防抖 (_scrollTick)
+    JS->>JS: requestAnimationFrame
+    JS->>JS: updateProgressUI()
+    JS->>JS: savePos()
+    JS->>LS: setItem('manga_pos', {...})
+
+    %% Navigate away save
+    User->>Browser: 点击导航（首页/分类/搜索）
+    Browser->>JS: navigate('home'等)
+    JS->>JS: 判定离开阅读器
+    JS->>JS: updateProgressUI()
+    JS->>JS: savePos()
+    JS->>JS: saveHistory()
+    JS->>LS: setItem('manga_pos', {...})
+    JS->>LS: setItem('manga_history', [...])
+```
 
 ### 2. 书源规则层 (`manga_reader.html` + `api/proxy.js`)
 

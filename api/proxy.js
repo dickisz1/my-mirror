@@ -261,77 +261,56 @@ const SOURCES = {
     }
   },
 
-  /* ---------------- 源 3：18comic（CF 挑战 + 图片切片还原，经 helper） ---------------- */
+  /* ---------------- 源 3：18comic（jmcomic API 模式，图片前端 canvas 还原） ---------------- */
   comic18: {
     key: 'comic18',
     name: '18comic',
-    version: '1.0.0',
+    version: '2.0.0',
     baseUrl: 'https://18comic.vip',
     referer: 'https://18comic.vip/',
-    timeout: 30000,                 // 首次抓取需过盾 ~30s
+    timeout: 30000,
     userAgent: UA,
     imageCdn: [],
-    decrypt: { enabled: false },    // 切片还原在 helper 里做，不是加密
-
-    /* 关键：整源走 helper 转发（见 handler 的 helper 分支）。
-       path 是 helper 的相对路径，params 是 helper 的参数名。 */
-    viaHelper: true,
+    decrypt: { enabled: false },
 
     rules: {
       home: {
         desc: '列表',
         frontPath: '/api/home',
-        path: '/list',
-        params: ['path'],
-        paramDefaults: { path: '/albums' },
+        path: '/api/home',
+        params: ['page', 'pageSize', 'type', 'flag'],
         match: /^\/api\/home$/
       },
       search: {
         desc: '搜索',
         frontPath: '/api/search',
-        path: '/search',
-        params: ['keyword'],
+        path: '/api/search',
+        params: ['keyword', 'page'],
         match: /^\/api\/search$/
       },
       detail: {
         desc: '作品详情',
         frontPath: '/api/comic/',
-        path: '/detail',
-        params: ['id'],
+        path: '/api/comic/{id}',
+        params: [],
         match: /^\/api\/comic\/(\d+)$/,
         vars: { id: 1 }
       },
       chapters: {
         desc: '章节列表',
         frontPath: '/api/comic/',
-        path: '/chapters',
-        params: ['id'],
+        path: '/api/comic/{id}/chapters',
+        params: [],
         match: /^\/api\/comic\/(\d+)\/chapters$/,
-        vars: { id: 1 }
-      },
-      chapInfo: {
-        desc: '章节信息',
-        frontPath: '/api/comic/chapter/info/',
-        path: '/detail',
-        params: ['id'],
-        match: /^\/api\/comic\/chapter\/info\/(\d+)$/,
         vars: { id: 1 }
       },
       images: {
         desc: '图片列表',
         frontPath: '/api/comic/image/',
-        path: '/images',
-        params: ['cid'],
+        path: '/api/comic/image/{cid}',
+        params: [],
         match: /^\/api\/comic\/image\/(\d+)$/,
         vars: { cid: 1 }
-      },
-      announce: {
-        desc: '公告',
-        frontPath: '/api/announcements',
-        path: '/list',
-        params: ['path'],
-        paramDefaults: { path: '/albums' },
-        match: /^\/api\/announcements$/
       }
     },
 
@@ -344,54 +323,18 @@ const SOURCES = {
       { grid: 'xiaoyuanGrid', title: '📏 短篇', key: 'shortList' }
     ],
 
-    /* 首页多栏目：一次前端请求 → 多次 helper 调用。
-       路径必须是真实存在的分类（实测从首页 HTML 里取到的）。
-       注意：浏览器会话是串行的，6 个栏目会累加 2-4 分钟（实测 200s 仍有
-       一个超时）。所以这里只放 2 个（首屏够用），其余靠用户点分类页加载。 */
-    homeMulti: [
-      { key: 'comicList',  path: '/albums' },
-      { key: 'doujinList', path: '/albums/doujin' }
-    ],
-
-    /* 图片：helper 的 /img 端点（取回 + 切片还原） */
+    /* 图片：浏览器直连 CDN（ACAO:*），前端 canvas 切片还原 */
     imageRule: {
-      desc: '18comic 图片',
+      desc: '18comic 图片（浏览器直连 CDN）',
       match: /^\/media\//,
+      direct: true,                  // 直连 CDN，不走 proxy 转发（主域名 403）
       cdn: false,
-      decrypt: false,
-      helper: true                  // 走 helper 的 /img
+      decrypt: false
     }
   }
 };
 
 const DEFAULT_SOURCE = 'manwaxu';
-
-/* 18comic 的数据/图片都要过 Cloudflare 挑战 + 图片切片还原，这两件事
-   Vercel 的 Node 函数做不到（需要真 Chrome 指纹），所以由一个 helper 进程承担。
-   本地验证时 helper 在 127.0.0.1；搬到墙外 VPS 后只需改这一个环境变量。
-   —— A 方案（本地）→ B 方案（VPS）的切换点就是这里。 */
-const HELPER_URL = (process.env.COMIC_HELPER || 'http://127.0.0.1:8765').replace(/\/+$/, '');
-
-/** 从请求里解析 helper 地址覆盖（前端「本机 helper」开关会带 ?helper=）。
- *  ⚠️ 只放行 loopback：否则这就是个 SSRF —— 任何人都能让我们的函数
- *  去请求任意内网地址。允许 localhost/127.x/[::1] 是因为 helper 天然
- *  跑在用户自己机器上（网页在线上、helper 在本机，这是唯一接通路径）。 */
-function resolveHelperUrl(query) {
-  const raw = query && query.get ? query.get('helper') : null;
-  if (!raw) return HELPER_URL;
-  let u;
-  try { u = new URL(raw); } catch (e) { return HELPER_URL; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return HELPER_URL;
-  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  /* ⚠️ 不能用 /^127\./ 做前缀匹配：`127.0.0.1.evil.com` 也满足，
-     那是真实的 SSRF 绕过。必须校验是**完整的 IPv4 且四段都在范围内**。 */
-  const isLoopback =
-    h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1' ||
-    /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(h) &&
-      h.split('.').slice(1).every(n => Number(n) <= 255);
-  if (!isLoopback) return HELPER_URL;
-  return (u.origin + (u.pathname === '/' ? '' : u.pathname)).replace(/\/+$/, '');
-}
 
 /** 解析源 key；未知/缺省一律回落默认源（保证旧链接与旧缓存可用） */
 function resolveSource(key) {
@@ -725,8 +668,7 @@ function serveRules(src, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=300');
   /* JSON 序列化会把 RegExp 变成 {}，前端就拿不到 match 了。
-     而「本机 helper」开关需要前端自己把前端路径映射到 helper 端点，
-     所以额外暴露 matchStr（正则源码），前端用 new RegExp(matchStr) 复原。 */
+     额外暴露 matchStr（正则源码），前端用 new RegExp(matchStr) 复原。 */
   const out = Object.assign({}, src);
   out.rules = {};
   Object.keys(src.rules || {}).forEach(k => {
@@ -735,7 +677,7 @@ function serveRules(src, res) {
     delete r.match;                       // 保留原契约：match 不出现在响应里
     out.rules[k] = r;
   });
-  /* imageRule.match 同理：前端要判断「这张图是否该直连 helper」 */
+  /* imageRule.match 同理：前端用 matchStr 复原正则判断图片归属 */
   if (out.imageRule && src.imageRule.match instanceof RegExp) {
     out.imageRule = Object.assign({}, src.imageRule, { matchStr: src.imageRule.match.source });
     delete out.imageRule.match;
@@ -752,148 +694,8 @@ function serveSources(res) {
     .send(JSON.stringify({ code: 200, data: sourceList(), default: DEFAULT_SOURCE }));
 }
 
-/** 走 helper 的数据请求（18comic：需过 CF 挑战） */
-async function serveDataViaHelper(src, action, rule, target, query, req, res) {
-  const vars = extractVars(rule, target, query);
-  const HURL = resolveHelperUrl(query);          // 前端可带 ?helper=（仅 loopback 放行）
-  /* helper 首次抓取要过盾 ~30s；首页要连抓 6 个栏目，
-     所以给 helper 的请求单独的、宽松的超时（与源的 timeout 分开）。 */
-  const HELPER_TIMEOUT = Number(process.env.COMIC_HELPER_TIMEOUT || 240000);
-
-  /* 首页多栏目：一次前端请求 → 多次 helper 调用。
-     并发发（helper 内部有锁会串行化，但连接建立可并行），
-     整体用 Promise.all 汇总，避免串行累加超时。 */
-  if (action === 'home' && src.homeMulti && src.homeMulti.length) {
-    try {
-      const results = await Promise.all(src.homeMulti.map(async m => {
-        const up = HURL + '/list?path=' + encodeURIComponent(m.path);
-        try {
-          const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
-          /* helper 可能"响应了但报错"（返回 502 + JSON error）。
-             fetchRaw 只对网络错误抛异常，所以必须显式检查状态码，
-             否则 JSON.parse 成功但 j.data 为空 → 又变成静默空列表。 */
-          if (r.status !== 200) {
-            let em = 'helper HTTP ' + r.status;
-            try { const e = JSON.parse(r.body.toString('utf8')); if (e && (e.msg || e.error)) em = String(e.msg || e.error).slice(0, 140); } catch (_) {}
-            return { key: m.key, path: m.path, ok: false, err: em, list: [] };
-          }
-          const j = JSON.parse(r.body.toString('utf8'));
-          return { key: m.key, path: m.path, ok: true,
-                   list: (j && j.data && (j.data.comicList || j.data.list)) || [] };
-        } catch (e) {
-          console.log('[proxy] helper list 失败 %s: %s', m.path, String(e.message).slice(0, 80));
-          return { key: m.key, path: m.path, ok: false,
-                   err: String(e.message).slice(0, 160), list: [] };
-        }
-      }));
-      const failed = results.filter(r => !r.ok);
-      const data = {};
-      results.forEach(r => { data[r.key] = r.list; });
-
-      /* helper 完全不可达 → 明确报错。绝不返回"静默空列表"：
-         那样前端只是显示空白，看不出是 helper 没起，最难排查。 */
-      if (failed.length === results.length) {
-        setCors(res);
-        return res.status(502).json({
-          code: 502,
-          error: 'helper 不可达',
-          helper: HURL,
-          source: src.name,
-          failed: failed.map(f => ({ path: f.path, err: f.err })),
-          hint: '18comic 源需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HURL +
-                ' 运行；线上需把环境变量 COMIC_HELPER 指向墙外 VPS，或在前端「设置 → 本机 helper」开启并确保本机 helper.py 在跑。'
-        });
-      }
-
-      /* 部分失败 → 200，但带 _helper 标记，前端可据此提示"部分栏目加载失败" */
-      data._helper = { ok: failed.length === 0, helper: HURL };
-      if (failed.length) {
-        data._helper.failed = failed.map(f => ({ path: f.path, err: f.err }));
-      }
-
-      setCors(res);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-store');
-      if (failed.length) res.setHeader('X-Helper-Partial', '1');
-      return res.status(200).send(JSON.stringify({ code: 200, data: data }));
-    } catch (err) {
-      setCors(res);
-      return res.status(502).json({ error: err.message, rule: 'helper(homeMulti)',
-                                    source: src.name, helper: HELPER_URL });
-    }
-  }
-
-  /* helper 的参数来源有两处：
-     1) rule.params 里声明的（从 query 读，如 search 的 keyword）
-     2) rule.vars 从**路径**提取的（如 /api/comic/123 → id=123）
-     前端把 id 放在路径里，不是 query，所以必须把 vars 也带过去。 */
-  const q = buildUpstreamQuery(rule, query, vars);
-  const up = HURL + fillPath(rule.path, vars) + (q ? '?' + q : '');
-  try {
-    const r = await fetchRaw(up, { Accept: '*/*' }, HELPER_TIMEOUT);
-    setCors(res);
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(r.status).send(r.body);
-  } catch (err) {
-    setCors(res);
-    return res.status(502).json({
-      error: err.message, rule: action, target: up, source: src.name,
-      hint: '18comic 需要 helper 进程（过 Cloudflare + 图片切片还原）在 ' + HURL + ' 运行；' +
-            '线上可开启前端「设置 → 本机 helper」并确保本机 helper.py 在跑。'
-    });
-  }
-}
-
-/** 走 helper 的图片（18comic：取回 + 切片还原） */
-async function serveImageViaHelper(src, target, req, res) {
-  /* target 形如 /media/photos/{book}/{img}.webp
-     还原需要 book 与 img 两个值来算段数，都从路径里取。 */
-  const m = String(target).match(/^\/media\/(?:photos|albums|videos)\/(?:tmb\/)?(\d+)\/([^/?#]+)/);
-  let book = '', img = '';
-  if (m) {
-    book = m[1];
-    img = (m[2] || '').replace(/\.[a-z0-9]+$/i, '');
-  }
-  /* 图片请求也要认前端的「本机 helper」开关：从 req.url 解析 ?helper= */
-  let HURL = HELPER_URL;
-  try { HURL = resolveHelperUrl(new URL(req.url, 'https://' + (req.headers.host || 'localhost')).searchParams); } catch (e) {}
-  /* ⚠️ 取图必须用 CDN 主机，不能用 src.baseUrl（主域名）。
-     实测：18comic.vip/media/... → 403；cdn-msp*.18comic.vip/media/... → 200。
-     上游的 ?host= 由前端带上（图片列表返回的绝对地址里的主机）。 */
-  let imgBase = src.baseUrl;
-  try {
-    const hq = new URL(req.url, 'https://' + (req.headers.host || 'localhost')).searchParams.get('host');
-    if (hq && /^https?:\/\//i.test(hq)) imgBase = hq.replace(/\/+$/, '');
-  } catch (e) {}
-  const up = HURL + '/img?url=' + encodeURIComponent(imgBase + target) +
-             '&book=' + encodeURIComponent(book) + '&img=' + encodeURIComponent(img);
-  try {
-    const r = await fetchRaw(up, { Accept: '*/*' }, src.timeout);
-    if (r.status === 200 && r.body && r.body.length > 0) {
-      setCors(res);
-      res.setHeader('Content-Type', r.headers['content-type'] || 'image/webp');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.setHeader('X-Source-Rule', 'image(helper)');
-      if (r.headers['x-cache']) res.setHeader('X-Helper-Cache', r.headers['x-cache']);
-      return res.status(200).send(r.body);
-    }
-    setCors(res);
-    return res.status(502).json({ error: 'helper image status ' + r.status, target: target });
-  } catch (err) {
-    setCors(res);
-    return res.status(502).json({
-      error: err.message, rule: 'image(helper)', target: target,
-      hint: 'helper 未运行？' + HELPER_URL
-    });
-  }
-}
-
 /** 第三步-A：按书源规则取数据 */
 async function serveData(src, action, rule, target, query, req, res) {
-  /* 整源走 helper 的源（18comic） */
-  if (src.viaHelper) return serveDataViaHelper(src, action, rule, target, query, req, res);
-
   const vars = extractVars(rule, target, query);
 
   /* ---- 合成章节（无章节源，如 pixiv）：先取详情拿 pageCount ---- */
@@ -1000,9 +802,6 @@ async function serveData(src, action, rule, target, query, req, res) {
 /** 第三步-B：按源的图片规则取图（容灾 + 可选解密） */
 async function serveImage(src, target, req, res) {
   const ir = src.imageRule || {};
-
-  /* 走 helper 的图片（18comic：切片还原） */
-  if (ir.helper) return serveImageViaHelper(src, target, req, res);
 
   const hosts = ir.host ? [ir.host] : (src.imageCdn || []);
   const tried = [];
@@ -1262,11 +1061,10 @@ module.exports = async function handler(req, res) {
   let target = sp.get('p') || pathname;
   if (target.charAt(0) !== '/') target = '/' + target;
 
-  // 转发时剔除内部参数（p / src / helper / host 都不透传给上游）
+  // 转发时剔除内部参数（p / src / host 都不透传给上游）
   const rest = new URLSearchParams(sp);
   rest.delete('p');
   rest.delete('src');
-  rest.delete('helper');
   rest.delete('host');
   const query = rest;
 
