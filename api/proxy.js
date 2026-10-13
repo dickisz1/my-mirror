@@ -946,7 +946,15 @@ async function serveData(src, action, rule, target, query, req, res) {
             author: (album.author && album.author.length ? album.author[0] : '') || '',
             cover: coverUrl,
             pic: coverUrl,
-            category: album.category || null,
+            category: album.category || album.categories || album.genre || album.class || null,
+            // DEBUG: 列出 album 所有含 cat/genre/class 关键字的字段
+            _debugCatFields: (() => {
+              const r = {};
+              Object.keys(album).forEach(k => {
+                if(/cat|genre|class|type/i.test(k)) r[k] = album[k];
+              });
+              return r;
+            })(),
             tags: (album.tags && album.tags.length ? album.tags.join(',') : ''),
             intro: album.description || '',
             tHits: Number(album.total_views) || 0,
