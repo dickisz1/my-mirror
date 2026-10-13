@@ -278,9 +278,17 @@ const SOURCES = {
         desc: '列表',
         frontPath: '/api/home',
         path: '/categories/filter',
-        params: ['page', 'pageSize', 'c', 'type', 'flag'],
-        paramDefaults: { order: '', o: 'mv' },
+        params: ['page', 'pageSize', 'o', 't'],
+        paramDefaults: { o: 'mv' },
         match: /^\/api\/home$/
+      },
+      albums: {
+        desc: '分类列表（path 模式）',
+        frontPath: '/api/albums',
+        path: '/albums',
+        params: ['o', 't', 'page'],
+        paramDefaults: { o: 'mv' },
+        match: /^\/api\/albums\/?([a-z]+)?$/
       },
       search: {
         desc: '搜索',
