@@ -277,40 +277,47 @@ const SOURCES = {
       home: {
         desc: '列表',
         frontPath: '/api/home',
-        path: '/api/home',
+        path: '/categories/filter',
         params: ['page', 'pageSize', 'type', 'flag'],
+        paramMap: { pageSize: 'c' },
+        paramDefaults: { order: '', o: 'mv' },
         match: /^\/api\/home$/
       },
       search: {
         desc: '搜索',
         frontPath: '/api/search',
-        path: '/api/search',
+        path: '/search',
         params: ['keyword', 'page'],
+        paramMap: { keyword: 'search_query' },
+        paramDefaults: { main_tag: '0', o: 'mr', t: '' },
         match: /^\/api\/search$/
       },
       detail: {
         desc: '作品详情',
         frontPath: '/api/comic/',
-        path: '/api/comic/{id}',
+        path: '/album',
         params: [],
         match: /^\/api\/comic\/(\d+)$/,
-        vars: { id: 1 }
+        vars: { id: 1 },
+        varToQuery: { id: 'id' }
       },
       chapters: {
         desc: '章节列表',
         frontPath: '/api/comic/',
-        path: '/api/comic/{id}/chapters',
+        path: '/album',
         params: [],
         match: /^\/api\/comic\/(\d+)\/chapters$/,
-        vars: { id: 1 }
+        vars: { id: 1 },
+        varToQuery: { id: 'id' }
       },
       images: {
         desc: '图片列表',
         frontPath: '/api/comic/image/',
-        path: '/api/comic/image/{cid}',
+        path: '/chapter',
         params: [],
         match: /^\/api\/comic\/image\/(\d+)$/,
-        vars: { cid: 1 }
+        vars: { cid: 1 },
+        varToQuery: { cid: 'id' }
       }
     },
 
@@ -697,6 +704,24 @@ function comic18Decrypt(encryptedB64, ts) {
   }
 }
 
+/** 18comic CDN 域名列表（从 jmcomic JmModuleConfig.DOMAIN_IMAGE_LIST 提取） */
+const COMIC18_CDN_DOMAINS = [
+  'cdn-msp.jmapiproxy1.cc',
+  'cdn-msp.jmapiproxy2.cc',
+  'cdn-msp2.jmapiproxy2.cc',
+  'cdn-msp3.jmapiproxy2.cc',
+  'cdn-msp.jmapinodeudzn.net',
+  'cdn-msp3.jmapinodeudzn.net'
+];
+
+/** 将 18comic 封面路径转为完整 CDN URL */
+function toComic18Cover(path) {
+  if (!path) return '';
+  if (path.startsWith('http')) return path;
+  const domain = COMIC18_CDN_DOMAINS[0];
+  return 'https://' + domain + path;
+}
+
 /** get_num 的 JS 版本（与 jmcomic Python 一致） */
 function comic18GetNum(scrambleId, aid, filename) {
   scrambleId = parseInt(scrambleId) || 0;
@@ -717,7 +742,8 @@ function comic18Filename(url) {
 }
 
 /** comic18 直连请求（带签名 + 解密） */
-async function comic18Fetch(path, query) {
+async function comic18Fetch(path, query, opts) {
+  opts = opts || {};
   const domain = COMIC18_API_DOMAINS[0];
   const auth = comic18GenerateAuth();
   
@@ -736,6 +762,12 @@ async function comic18Fetch(path, query) {
   }
   
   const bodyStr = r.body.toString('utf8');
+  
+  // raw 模式：直接返回原始 body（用于 /chapter_view_template 等 HTML 响应）
+  if (opts.raw) {
+    return { raw: bodyStr, status: r.status };
+  }
+  
   let j = null;
   try { j = JSON.parse(bodyStr); } catch (e) { j = null; }
   
@@ -756,6 +788,13 @@ async function comic18Fetch(path, query) {
   }
   
   return j;
+}
+
+/** 从 /chapter_view_template HTML 中提取 scramble_id */
+function comic18ExtractScrambleId(html) {
+  if (!html) return 0;
+  const m = html.match(/var\s+scramble_id\s*=\s*(\d+)/);
+  return m ? parseInt(m[1]) : 0;
 }
 
 /** 第二步：先返回前端界面 */
@@ -812,14 +851,33 @@ async function serveData(src, action, rule, target, query, req, res) {
   /* ---- comic18：直连反代（不经任务队列） ---- */
   if (isComic18(src)) {
     try {
-      const upPath = fillPath(rule.path, extractVars(rule, target, query));
+      const vars = extractVars(rule, target, query);
+      const upPath = fillPath(rule.path, vars);
       const upQuery = buildUpstreamQuery(rule, query, null);
-      const j = await comic18Fetch(upPath, upQuery);
-      
-      // images 响应：加 blockNum（前端 canvas 还原需要）
+      // varToQuery：把路径里的 id 作为 query 参数传给上游（如 /album?id=123）
+      const extraQ = [];
+      if (rule.varToQuery) {
+        Object.keys(rule.varToQuery).forEach(vk => {
+          const uq = rule.varToQuery[vk];
+          const val = vars[vk];
+          if (val !== undefined && val !== null && val !== '') extraQ.push(uq + '=' + encodeURIComponent(val));
+        });
+      }
+      const allQ = [upQuery].concat(extraQ.filter(Boolean)).join('&');
+      const j = await comic18Fetch(upPath, allQ);
+
+      // images：/chapter 返回 images 数组，还需 /chapter_view_template 拿 scramble_id
       if (action === 'images' && j.data && Array.isArray(j.data.images)) {
-        const scrambleId = j.data.scrambleId || j.data.scramble_id || 0;
-        const photoId = j.data.photoId || j.data.photo_id || 0;
+        const photoId = j.data.id || vars.cid || 0;
+        // 先调 chapter_view_template 拿 scramble_id（HTML 响应，用 raw 模式）
+        let scrambleId = 0;
+        try {
+          const ts = Math.floor(Date.now() / 1000);
+          const scrPath = '/chapter_view_template?id=' + photoId + '&mode=vertical&page=0&app_img_shunt=1&express=off&v=' + ts;
+          const scr = await comic18Fetch(scrPath, '', { raw: true });
+          scrambleId = comic18ExtractScrambleId(scr.raw);
+        } catch (e) { /* scramble 获取失败不影响图片加载 */ }
+        j.data.scrambleId = scrambleId;
         j.data.images = j.data.images.map((im, i) => {
           const url = im.url || im.img_url || '';
           const filename = comic18Filename(url);
@@ -832,7 +890,57 @@ async function serveData(src, action, rule, target, query, req, res) {
           };
         });
       }
-      
+
+      // home/search：把 content 映射成前端认的 list/comicList
+      if ((action === 'home' || action === 'search') && j.data && j.data.content) {
+        const arr = Array.isArray(j.data.content) ? j.data.content : [];
+        const list = arr.map(it => ({
+          id: String(it.id || ''),
+          title: it.name || '',
+          pic: toComic18Cover(it.cover || it.thumb || ''),
+          author: (it.author && it.author.length ? it.author[0] : '') || '',
+          tags: (it.category && it.category.title) || '',
+          tHits: Number(it.total_views) || 0,
+          collection: 0,
+          status: 1,
+          intro: ''
+        })).filter(x => x.id);
+        j.data.list = list;
+        j.data.comicList = list;
+      }
+
+      // detail/chapters：/album 返回 series 数组作为章节
+      if ((action === 'detail' || action === 'chapters') && j.data) {
+        const album = j.data;
+        const chapters = Array.isArray(album.series) ? album.series.map((s, i) => ({
+          id: String(s.id || ''),
+          title: s.name || ('第' + (i + 1) + '话'),
+          sortId: i + 1,
+          picCount: Number(s.total_photos) || 0,
+          isVip: s.need_buy || false,
+          addtime: s.addtime || ''
+        })) : [];
+        if (action === 'detail') {
+          // 详情页：映射为前端认的 info 对象
+          j.data = {
+            id: String(album.id || ''),
+            title: album.name || '',
+            author: (album.author && album.author.length ? album.author[0] : '') || '',
+            cover: toComic18Cover(album.cover || album.thumb || ''),
+            pic: toComic18Cover(album.cover || album.thumb || ''),
+            tags: (album.tags && album.tags.length ? album.tags.join(',') : ''),
+            intro: album.description || '',
+            tHits: Number(album.total_views) || 0,
+            collection: Number(album.likes) || 0,
+            status: 1,
+            chapters: chapters
+          };
+        } else {
+          // chapters：返回 list
+          j.data = { list: chapters, total: chapters.length };
+        }
+      }
+
       setCors(res);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
