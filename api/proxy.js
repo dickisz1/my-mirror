@@ -896,17 +896,21 @@ async function serveData(src, action, rule, target, query, req, res) {
       // home/search：把 content 映射成前端认的 list/comicList
       if ((action === 'home' || action === 'search') && j.data && j.data.content) {
         const arr = Array.isArray(j.data.content) ? j.data.content : [];
-        const list = arr.map(it => ({
-          id: String(it.id || ''),
-          title: it.name || '',
-          pic: toComic18Cover(it.cover || it.thumb || ''),
-          author: (it.author && it.author.length ? it.author[0] : '') || '',
-          tags: (it.category && it.category.title) || '',
-          tHits: Number(it.total_views) || 0,
-          collection: 0,
-          status: 1,
-          intro: ''
-        })).filter(x => x.id);
+        const list = arr.map(it => {
+          // 列表页 image 为空，用 album id 构造封面 URL
+          const coverPath = it.cover || it.thumb || ('/media/albums/' + it.id + '.jpg');
+          return {
+            id: String(it.id || ''),
+            title: it.name || '',
+            pic: toComic18Cover(coverPath),
+            author: (it.author && it.author.length ? it.author[0] : '') || '',
+            tags: (it.category && it.category.title) || '',
+            tHits: Number(it.total_views) || 0,
+            collection: 0,
+            status: 1,
+            intro: ''
+          };
+        }).filter(x => x.id);
         j.data.list = list;
         j.data.comicList = list;
       }
