@@ -5,6 +5,7 @@
   "description": "18comic proxy with task queue",
   "dependencies": {
     "@vercel/kv": "^1.0.0",
-    "wreq-js": "^3.2.0"
+    "wreq-js": "^3.2.0",
+    "@wreq-js/binding-linux-x64-gnu": "^3.2.0"
   }
 }
