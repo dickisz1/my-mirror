@@ -863,12 +863,10 @@ async function serveData(src, action, rule, target, query, req, res) {
       const vars = extractVars(rule, target, query);
       const upPath = fillPath(rule.path, vars);
       const upQuery = buildUpstreamQuery(rule, query, null);
-      // DEBUG: 把 debug 信息写到响应体，方便通过 web_extract 查看
+      // DEBUG: 把 debug 信息写到 HTTP 响应头，最可靠的方式
       const debugInfo = { target, ruleMatch: String(rule.match), vars, upPath, upQuery };
       console.log('[comic18-debug]', JSON.stringify(debugInfo));
-      // 临时：把 debug 信息附加到响应体
-      const origJson = res.json.bind(res);
-      res.json = (obj) => { obj._debug = debugInfo; return origJson(obj); };
+      res.setHeader('X-Debug-Info', JSON.stringify(debugInfo));
       // varToQuery：把路径里的 id 作为 query 参数传给上游（如 /album?id=123）
       const extraQ = [];
       if (rule.varToQuery) {
@@ -880,6 +878,7 @@ async function serveData(src, action, rule, target, query, req, res) {
       }
       const allQ = [upQuery].concat(extraQ.filter(Boolean)).join('&');
       const j = await comic18Fetch(upPath, allQ);
+      j._debug = debugInfo;
 
       // images：/chapter 返回 images 数组，还需 /chapter_view_template 拿 scramble_id
       if (action === 'images' && j.data && Array.isArray(j.data.images)) {
