@@ -11,7 +11,9 @@
     "api/**/*.js": {
       "includeFiles": [
         "manga_reader.html",
-        "node_modules/@wreq-js/binding-linux-x64-gnu/**"
+        "node_modules/@wreq-js/binding-linux-x64-gnu/**",
+        "node_modules/tls-impersonate/**",
+        "node_modules/curl-cffi-node/**"
       ],
       "memory": 1024,
       "maxDuration": 30
