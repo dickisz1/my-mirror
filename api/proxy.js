@@ -946,6 +946,7 @@ async function serveData(src, action, rule, target, query, req, res) {
             author: (album.author && album.author.length ? album.author[0] : '') || '',
             cover: coverUrl,
             pic: coverUrl,
+            category: album.category || null,
             tags: (album.tags && album.tags.length ? album.tags.join(',') : ''),
             intro: album.description || '',
             tHits: Number(album.total_views) || 0,
