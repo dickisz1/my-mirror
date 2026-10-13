@@ -59,7 +59,7 @@ body.in-reader #readerTools,body.in-reader #rulesPanel{position:fixed;left:0;rig
 .reader-top.ultra .progress{display:none}   /* 极窄：进度条让位，仅保留图标与标题 */
 #readerArea{padding:20px;max-width:800px;margin:0 auto}
 .imgwrap{position:relative;width:100%;margin-bottom:8px;background:#111;border-radius:4px;overflow:hidden;min-height:120px}
-.imgwrap img{width:100%;display:block;background:#111;object-fit:contain}
+.imgwrap img,.imgwrap canvas{width:100%;display:block;background:#111;object-fit:contain}
 .imgwrap.loading{background:linear-gradient(90deg,#1a1a2e 25%,#16213e 50%,#1a1a2e 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
 @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
 footer{text-align:center;padding:20px;color:var(--mut);font-size:11px;border-top:1px solid var(--ln);margin-top:40px;line-height:1.8}
