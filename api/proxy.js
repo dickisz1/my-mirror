@@ -760,10 +760,13 @@ async function comic18Fetch(path, query, opts) {
     'Accept-Encoding': 'identity',
     'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
     'token': auth.token,
-    'tokenparam': auth.tokenparam
+    'tokenparam': auth.tokenparam,
+    'referer': 'https://18comic.vip/',
+    'origin': 'https://18comic.vip'
   };
   
   const url = `https://${domain}${path}${query ? '?' + query : ''}`;
+  console.log('[comic18Fetch] url=', url, 'headers=', JSON.stringify(headers));
   const r = await fetchRaw(url, headers, 15000);
   
   if (r.status !== 200) {
