@@ -879,13 +879,20 @@ async function serveData(src, action, rule, target, query, req, res) {
         } catch (e) { /* scramble 获取失败不影响图片加载 */ }
         j.data.scrambleId = scrambleId;
         j.data.images = j.data.images.map((im, i) => {
-          const url = im.url || im.img_url || '';
-          const filename = comic18Filename(url);
-          const blockNum = comic18GetNum(scrambleId, photoId, filename);
+          // im 可能是字符串（如 "00001.webp"）或对象（如 {url: "..."}）
+          let filename = '';
+          if (typeof im === 'string') {
+            filename = im;
+          } else if (im && typeof im === 'object') {
+            filename = im.url || im.img_url || im.filename || '';
+          }
+          // 拼接 CDN URL：https://cdn-msp.{domain}/media/photos/{photo_id}/{index:05}{suffix}
+          const cdnUrl = 'https://' + COMIC18_CDN_DOMAINS[0] + '/media/photos/' + photoId + '/' + filename;
+          const blockNum = comic18GetNum(scrambleId, photoId, filename.replace(/\.\w+$/, ''));
           return {
-            url: url,
-            urlOrig: url,
-            index: im.index || i,
+            url: cdnUrl,
+            urlOrig: cdnUrl,
+            index: i,
             blockNum: blockNum
           };
         });
@@ -922,12 +929,15 @@ async function serveData(src, action, rule, target, query, req, res) {
         })) : [];
         if (action === 'detail') {
           // 详情页：映射为前端认的 info 对象
+          // 封面 URL：/album 返回的 cover 可能是路径，用 toComic18Cover 拼接
+          const coverPath = album.cover || album.thumb || ('/media/albums/' + album.id + '.jpg');
+          const coverUrl = toComic18Cover(coverPath);
           j.data = {
             id: String(album.id || ''),
             title: album.name || '',
             author: (album.author && album.author.length ? album.author[0] : '') || '',
-            cover: toComic18Cover(album.cover || album.thumb || ''),
-            pic: toComic18Cover(album.cover || album.thumb || ''),
+            cover: coverUrl,
+            pic: coverUrl,
             tags: (album.tags && album.tags.length ? album.tags.join(',') : ''),
             intro: album.description || '',
             tHits: Number(album.total_views) || 0,
