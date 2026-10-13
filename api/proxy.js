@@ -286,7 +286,7 @@ const SOURCES = {
         desc: '搜索',
         frontPath: '/api/search',
         path: '/search',
-        params: ['keyword', 'page'],
+        params: ['keyword', 'page', 'o', 't'],
         paramMap: { keyword: 'search_query' },
         paramDefaults: { main_tag: '0', o: 'mr', t: '' },
         match: /^\/api\/search$/
