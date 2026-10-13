@@ -473,8 +473,6 @@ const state = {
   chapters:[],       // 章节列表
   chapIdx:0,
   homeType:0,        // 分类页栏目 type
-  categoryId:null,   // 从详情页 facet 跳转的分类 id
-  categoryName:'',  // 从详情页 facet 跳转的分类名
   homePage:1,
   homeTotal:1,
   continuous:false,   // 连续阅读模式
@@ -625,51 +623,35 @@ function renderFacets(info){
   facets.forEach(f => {
     const val = info[f.field];
     if(!val) return;
-    if(f.type === 'category'){
-      // category 是对象 {id, title}，点击跳分类页
-      const id = val[f.idField || 'id'] || val.id || '';
-      const name = val[f.clickField || 'title'] || val.title || '';
-      if(id && name){
-        parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\'category\',\''+esc(String(id))+'\',\''+esc(String(name)).replace(/'/g,"\\'")+'\')">'+esc(f.label)+': '+esc(name)+'</span>');
-      }
-    } else if(f.type === 'tag'){
+    if(f.type === 'tag'){
       // tags 是逗号分隔字符串，每个标签可点击
       String(val).split(',').filter(Boolean).slice(0,20).forEach(t=>{
-        parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\'search\',\''+esc(t).replace(/'/g,"\\'")+'\')">'+esc(t)+'</span>');
+        parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\''+esc(t).replace(/'/g,"\\'")+'\')">'+esc(t)+'</span>');
       });
     } else if(f.type === 'author'){
       // author 可能是字符串或数组
       const authors = Array.isArray(val) ? val : [val];
       authors.filter(Boolean).slice(0,5).forEach(a=>{
-        parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\'search\',\''+esc(a).replace(/'/g,"\\'")+'\')">'+esc(f.label)+': '+esc(a)+'</span>');
+        parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\''+esc(a).replace(/'/g,"\\'")+'\')">'+esc(f.label)+': '+esc(a)+'</span>');
       });
     }
   });
   el.innerHTML = parts.join('');
 }
 
-/** facet 点击跳转：search → 搜索页，category → 分类页 */
-function facetClick(action, value, name){
-  if(action === 'category'){
-    state.categoryId = value;
-    state.categoryName = name || '';
-    navigate('category');
-    renderCategory();
-  } else {
-    const si = document.getElementById('searchInput');
-    if(si) si.value = value;
-    navigate('search');
-    renderSearch();
-  }
+/** facet 点击跳转：value 作为搜索词进入搜索页 */
+function facetClick(value){
+  const si = document.getElementById('searchInput');
+  if(si) si.value = value;
+  navigate('search');
+  renderSearch();
 }
 
 async function loadCategory(reset){
   const grid = document.getElementById('categoryGrid');
   if(reset) grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>';
   try{
-    const params = {page:state.homePage, pageSize:12, type:state.homeType, flag:1};
-    if(state.categoryId) params.c = state.categoryId;
-    const d = await apiGet(frontPathOf('home','/api/home'), params);
+    const d = await apiGet(frontPathOf('home','/api/home'), {page:state.homePage, pageSize:12, type:state.homeType, flag:1});
     const list = (d && (d.comicList||d.list)) || [];
     state.homeTotal = (d && d.total) || list.length;
     const html = list.map(cardHtml).join('');
