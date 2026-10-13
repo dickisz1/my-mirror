@@ -4,6 +4,7 @@
   "private": true,
   "description": "18comic proxy with task queue",
   "dependencies": {
-    "@vercel/kv": "^1.0.0"
+    "@vercel/kv": "^1.0.0",
+    "wreq-js": "^3.2.0"
   }
 }
