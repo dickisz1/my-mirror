@@ -5,6 +5,6 @@
   "description": "18comic proxy with task queue",
   "dependencies": {
     "@vercel/kv": "^1.0.0",
-    "tls-impersonate": "^0.2.0"
+    "curl-cffi-node": "^0.1.8"
   }
 }

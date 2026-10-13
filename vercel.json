@@ -9,10 +9,7 @@
   ],
   "functions": {
     "api/**/*.js": {
-      "includeFiles": [
-        "manga_reader.html",
-        "node_modules/tls-impersonate/**"
-      ],
+      "includeFiles": "manga_reader.html,node_modules/curl-cffi-node/**",
       "memory": 1024,
       "maxDuration": 30
     }
