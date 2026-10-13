@@ -10,6 +10,7 @@
  */
 const https = require('https');
 const http = require('http');
+const zlib = require('zlib');
 
 // jmcomic 密钥（从 jm_config.py 逆向）
 const APP_TOKEN_SECRET = '185Hcomic3PAPP7R';
@@ -67,31 +68,49 @@ module.exports = async function handler(req, res) {
   
   // 构造请求头（模拟 jmcomic 的 APP_HEADERS_TEMPLATE）
   const headers = {
-    'Accept-Encoding': 'gzip, deflate',
+    'Accept-Encoding': 'gzip',
     'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
     'token': auth.token,
     'tokenparam': auth.tokenparam
   };
-  
+
   const startTime = Date.now();
-  
+
   try {
     const response = await fetchWithTimeout(domain, testPath, headers, 15000);
     const elapsed = Date.now() - startTime;
     
+    // 解压 gzip
+    let bodyBuffer = response.body;
+    const encoding = response.headers['content-encoding'];
+    if (encoding && encoding.includes('gzip')) {
+      bodyBuffer = await new Promise((resolve, reject) => {
+        zlib.gunzip(response.body, (err, result) => {
+          if (err) reject(err);
+          else resolve(result);
+        });
+      });
+    }
+    
     // 检查是否是 CF 挑战页
-    const bodyStr = response.body.toString('utf8');
+    const bodyStr = bodyBuffer.toString('utf8');
     const isCFChallenge = bodyStr.includes('Just a moment') || bodyStr.includes('cf-mitigated');
+    
+    // 尝试解析 JSON
+    let parsed = null;
+    try { parsed = JSON.parse(bodyStr); } catch(e) {}
     
     // 构造响应
     const result = {
-      success: response.status === 200 && !isCFChallenge,
+      success: response.status === 200 && !isCFChallenge && parsed !== null,
       domain: domain,
       path: testPath,
       status: response.status,
       elapsed_ms: elapsed,
-      body_length: response.body.length,
+      body_length: bodyBuffer.length,
       is_cf_challenge: isCFChallenge,
+      is_valid_json: parsed !== null,
+      json_keys: parsed ? Object.keys(parsed) : null,
       body_preview: bodyStr.substring(0, 500),
       auth: {
         ts: auth.ts,
