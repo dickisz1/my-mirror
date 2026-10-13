@@ -923,6 +923,8 @@ async function serveData(src, action, rule, target, query, req, res) {
           id: String(s.id || ''),
           title: s.name || ('第' + (i + 1) + '话'),
           sortId: i + 1,
+          // /album 的 series 不含 total_photos，真实图片数由 /chapter 的 images 数组长度决定
+          // 前端展示用 "?" 表示未知，fetchImages 会实时获取
           picCount: Number(s.total_photos) || 0,
           isVip: s.need_buy || false,
           addtime: s.addtime || ''
