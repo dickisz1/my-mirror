@@ -3,7 +3,7 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!api/test-|api/source).*)",
       "destination": "/api/proxy"
     }
   ],
