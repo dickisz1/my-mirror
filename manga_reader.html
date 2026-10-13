@@ -460,10 +460,8 @@ function descrambleImg(img, num){
     tmp.getContext('2d').drawImage(img, 0, ySrc, w, move, 0, 0, w, move);
     ctx.drawImage(tmp, 0, yDst);
   }
-  // 把 canvas 结果换回 img
-  c.toBlob(blob => {
-    if(blob) img.src = URL.createObjectURL(blob);
-  }, 'image/webp');
+  // 直接替换 img 为 canvas，避免 src 重新加载导致闪烁
+  img.replaceWith(c);
 }
 
 /* ============================================================
