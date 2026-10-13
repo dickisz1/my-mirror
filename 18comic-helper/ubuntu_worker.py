@@ -136,42 +136,44 @@ def solve_and_fetch(task_id, api_path):
 
         log(f"CF 过盾成功（cf_clearance 已下发）: {page.title()}")
 
-        # 步骤 2：取数
-        target_url = f"https://18comic.vip{api_path}"
-        log(f"访问: {target_url}")
+        # 步骤 2：在浏览器内 fetch API 拿 JSON（不过盾后 cookie 已生效）
+        js_code = """
+        async (path) => {
+            const r = await fetch(path);
+            const j = await r.json();
+            return JSON.stringify(j);
+        }
+        """
+        log(f"浏览器内 fetch: {api_path}")
 
         try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            content = page.evaluate(js_code, api_path)
         except Exception as e:
-            log(f"导航异常: {e}")
-
-        # 取数后也等一次，避免读到导航中途的空白
-        _wait_cf(page, budget_s=60)
-        page.wait_for_timeout(1500)
-
-        title = page.title()
-        content = page.content()
-
-        # 取数后如果又撞盾，说明 cookie 没生效
-        if not _cf_cleared(page) or 'Just a moment' in title or '请稍候' in title:
-            log(f"取数时遇到 CF 挑战（title={title}）")
+            log(f"浏览器内 fetch 失败: {e}")
             return {
                 "task_id": task_id,
                 "api_path": api_path,
                 "status": "failed",
-                "error": f"取数时遇到 CF 挑战（title={title}）—— cookie 失效或出口 IP 变了",
+                "error": f"浏览器内 fetch 失败: {e}",
             }
 
-        if len(content) < 1000:
-            log(f"内容过短: {len(content)} 字节")
+        if not content or len(content) < 100:
+            log(f"JSON 过短: {len(content) if content else 0} 字节")
             return {
                 "task_id": task_id,
                 "api_path": api_path,
                 "status": "failed",
-                "error": f"内容过短: {len(content)} 字节",
+                "error": f"JSON 过短: {len(content) if content else 0} 字节",
             }
 
-        log(f"取数成功: {len(content)} 字节")
+        # 从 JSON 提取 title（如果有）
+        try:
+            j = json.loads(content)
+            title = j.get('title', '') or page.title()
+        except Exception:
+            title = page.title()
+
+        log(f"取数成功: {len(content)} 字节 (JSON)")
 
         return {
             "task_id": task_id,

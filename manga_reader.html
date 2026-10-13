@@ -493,12 +493,42 @@ async function apiGet(path, params){
     }
   }
 
+  /* comic18 走任务队列：前端建任务 → worker 认领 → CloakBrowser 过盾+取数 → Redis 回写 → 前端轮询拿结果 */
+  if(SRC_KEY === 'comic18' && !state.localHelper){
+    return await apiGetViaQueue(path, params);
+  }
+
   const url = buildUrl(path, params);
   const r = await fetch(url, {cache:'no-store'});
   if(!r.ok) throw new Error('HTTP ' + r.status + ' @ ' + path);
   const j = await r.json();
   if(j && j.code !== undefined && j.code !== 200) throw new Error('code ' + j.code + ' ' + (j.msg||''));
   return j && j.data !== undefined ? j.data : j;
+}
+
+/** comic18 任务队列：建任务 → 轮询 → 返回 JSON（与 apiGet 返回格式一致） */
+async function apiGetViaQueue(path, params){
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  const r = await fetch(`/api/proxy/task?path=${encodeURIComponent(path + qs)}`, {cache:'no-store'});
+  if(!r.ok) throw new Error('建任务失败 HTTP ' + r.status);
+  const { task_id } = await r.json();
+  if(!task_id) throw new Error('建任务失败：无 task_id');
+
+  for(let i = 0; i < 90; i++){
+    await new Promise(r => setTimeout(r, 2000));
+    const sr = await fetch(`/api/proxy/status?task_id=${task_id}`, {cache:'no-store'});
+    if(!sr.ok) continue;
+    const sd = await sr.json();
+    if(sd.status === 'done'){
+      const j = JSON.parse(sd.result.content);
+      if(j && j.code !== undefined && j.code !== 200) throw new Error('code ' + j.code + ' ' + (j.msg||''));
+      return j && j.data !== undefined ? j.data : j;
+    }
+    if(sd.status === 'failed'){
+      throw new Error(sd.result.error || '任务失败');
+    }
+  }
+  throw new Error('任务超时（180s）');
 }
 
 /** 直连本机 helper 取数据 */
