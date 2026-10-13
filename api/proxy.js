@@ -645,6 +645,119 @@ function normalizeImages(src, raw) {
  * 四、处理器
  * ============================================================ */
 
+/** 判断是否是 comic18 源（走直连反代，不经任务队列） */
+function isComic18(src) {
+  return src && src.key === 'comic18';
+}
+
+/**
+ * comic18 直连反代：Vercel Node.js 直接调 18comic API
+ * 
+ * 签名算法（从 jmcomic Python 库逆向）：
+ *   ts = 当前时间戳（秒）
+ *   token = md5(ts + APP_TOKEN_SECRET)
+ *   tokenparam = ts + ',' + APP_VERSION
+ * 
+ * 响应格式：{ code: 200, data: "<AES加密>" }
+ * AES 解密：key = md5(APP_DATA_SECRET), iv = 前16字节, CBC 模式
+ */
+const COMIC18_API_DOMAINS = [
+  'www.cdnhjk.net',
+  'www.cdngwc.cc',
+  'www.cdngwc.net',
+  'www.cdngwc.club'
+];
+const COMIC18_APP_TOKEN_SECRET = '185Hcomic3PAPP7R';
+const COMIC18_APP_DATA_SECRET = '185Hcomic3PAPP7R';
+const COMIC18_APP_VERSION = '2.1.11';
+
+function comic18Md5(str) {
+  return crypto.createHash('md5').update(str, 'utf8').digest('hex');
+}
+
+function comic18GenerateAuth() {
+  const ts = Math.floor(Date.now() / 1000).toString();
+  const token = comic18Md5(ts + COMIC18_APP_TOKEN_SECRET);
+  const tokenparam = ts + ',' + COMIC18_APP_VERSION;
+  return { ts, token, tokenparam };
+}
+
+/** AES-256-ECB 解密（comic18 data 字段，与 jmcomic 库一致） */
+function comic18Decrypt(encryptedB64, ts) {
+  try {
+    const encrypted = Buffer.from(encryptedB64, 'base64');
+    // key = md5(ts + secret)，32 字节，utf-8 编码
+    const key = Buffer.from(comic18Md5(ts + COMIC18_APP_DATA_SECRET), 'utf8');
+    const decipher = crypto.createDecipheriv('aes-256-ecb', key, null);
+    decipher.setAutoPadding(true);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString('utf8');
+  } catch (e) {
+    return null;
+  }
+}
+
+/** get_num 的 JS 版本（与 jmcomic Python 一致） */
+function comic18GetNum(scrambleId, aid, filename) {
+  scrambleId = parseInt(scrambleId) || 0;
+  aid = parseInt(aid) || 0;
+  if (aid < scrambleId) return 0;
+  if (aid < 268850) return 10;
+  const x = aid < 421926 ? 10 : 8;
+  const s = `${aid}${filename}`;
+  const hash = crypto.createHash('md5').update(s, 'utf8').digest('hex');
+  const num = hash.charCodeAt(hash.length - 1) % x;
+  return num * 2 + 2;
+}
+
+/** 从 18comic 图片 URL 提取 filename（不含扩展名） */
+function comic18Filename(url) {
+  const m = url.match(/\/(\d+)_\d+\.(\w+)$/);
+  return m ? m[1] : '';
+}
+
+/** comic18 直连请求（带签名 + 解密） */
+async function comic18Fetch(path, query) {
+  const domain = COMIC18_API_DOMAINS[0];
+  const auth = comic18GenerateAuth();
+  
+  const headers = {
+    'Accept-Encoding': 'identity',
+    'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
+    'token': auth.token,
+    'tokenparam': auth.tokenparam
+  };
+  
+  const url = `https://${domain}${path}${query ? '?' + query : ''}`;
+  const r = await fetchRaw(url, headers, 15000);
+  
+  if (r.status !== 200) {
+    throw new Error(`comic18 API HTTP ${r.status}`);
+  }
+  
+  const bodyStr = r.body.toString('utf8');
+  let j = null;
+  try { j = JSON.parse(bodyStr); } catch (e) { j = null; }
+  
+  if (!j || j.code !== 200) {
+    throw new Error(`comic18 API 返回异常: ${bodyStr.substring(0, 200)}`);
+  }
+  
+  // 解密 data 字段（key 依赖 ts）
+  if (typeof j.data === 'string') {
+    const decrypted = comic18Decrypt(j.data, auth.ts);
+    if (decrypted) {
+      try {
+        j.data = JSON.parse(decrypted);
+      } catch (e) {
+        j.data = decrypted;
+      }
+    }
+  }
+  
+  return j;
+}
+
 /** 第二步：先返回前端界面 */
 function serveFrontend(res) {
   const html = readFrontend();
@@ -696,6 +809,45 @@ function serveSources(res) {
 
 /** 第三步-A：按书源规则取数据 */
 async function serveData(src, action, rule, target, query, req, res) {
+  /* ---- comic18：直连反代（不经任务队列） ---- */
+  if (isComic18(src)) {
+    try {
+      const upPath = fillPath(rule.path, extractVars(rule, target, query));
+      const upQuery = buildUpstreamQuery(rule, query, null);
+      const j = await comic18Fetch(upPath, upQuery);
+      
+      // images 响应：加 blockNum（前端 canvas 还原需要）
+      if (action === 'images' && j.data && Array.isArray(j.data.images)) {
+        const scrambleId = j.data.scrambleId || j.data.scramble_id || 0;
+        const photoId = j.data.photoId || j.data.photo_id || 0;
+        j.data.images = j.data.images.map((im, i) => {
+          const url = im.url || im.img_url || '';
+          const filename = comic18Filename(url);
+          const blockNum = comic18GetNum(scrambleId, photoId, filename);
+          return {
+            url: url,
+            urlOrig: url,
+            index: im.index || i,
+            blockNum: blockNum
+          };
+        });
+      }
+      
+      setCors(res);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).send(JSON.stringify(j));
+    } catch (err) {
+      setCors(res);
+      return res.status(502).json({
+        error: err.message,
+        rule: action,
+        target: target,
+        source: src.name
+      });
+    }
+  }
+
   const vars = extractVars(rule, target, query);
 
   /* ---- 合成章节（无章节源，如 pixiv）：先取详情拿 pageCount ---- */
