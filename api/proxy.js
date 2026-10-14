@@ -1328,6 +1328,18 @@ module.exports = async function handler(req, res) {
     return res.status(204).end();
   }
 
+  /* --- 临时 DEBUG：18comic API 原始返回 --- */
+  if (pathname === '/debug/comic18-chapters' && req.method === 'GET') {
+    const id = sp.get('id');
+    if (!id) return res.status(400).json({ error: 'id required' });
+    try {
+      const j = await comic18Fetch('/api/comic/' + id + '/chapters');
+      return res.json({ raw: j });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   /* --- 任务队列：短轮询四个端点 --- */
   // 前端：创建任务
   if (pathname === '/task' && req.method === 'GET') {
