@@ -1333,10 +1333,25 @@ module.exports = async function handler(req, res) {
     const id = sp.get('id');
     if (!id) return res.status(400).json({ error: 'id required' });
     try {
-      const j = await comic18Fetch('/api/comic/' + id + '/chapters');
-      return res.json({ raw: j });
+      const auth = comic18GenerateAuth();
+      const domain = COMIC18_API_DOMAINS[0];
+      const url = `https://${domain}/api/comic/${id}/chapters`;
+      const headers = {
+        'Accept-Encoding': 'identity',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
+        'token': auth.token,
+        'tokenparam': auth.tokenparam,
+        'referer': 'https://18comic.vip/',
+        'origin': 'https://18comic.vip'
+      };
+      const r = await fetchRaw(url, headers, 15000);
+      const bodyStr = r.body.toString('utf8');
+      return res.json({
+        debug: { url, token: auth.token, tokenparam: auth.tokenparam, httpStatus: r.status },
+        response: bodyStr.substring(0, 3000)
+      });
     } catch (e) {
-      return res.status(500).json({ error: e.message });
+      return res.status(500).json({ error: e.message, stack: e.stack });
     }
   }
 
