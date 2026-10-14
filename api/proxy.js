@@ -677,7 +677,7 @@ const COMIC18_API_DOMAINS = [
 ];
 const COMIC18_APP_TOKEN_SECRET = '185Hcomic3PAPP7R';
 const COMIC18_APP_DATA_SECRET = '185Hcomic3PAPP7R';
-const COMIC18_APP_VERSION = '2.1.11';
+const COMIC18_APP_VERSION = '2.1.7';
 
 function comic18Md5(str) {
   return crypto.createHash('md5').update(str, 'utf8').digest('hex');
