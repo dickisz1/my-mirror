@@ -11,6 +11,7 @@ header.bar-hidden{transform:translateY(-100%);opacity:0;pointer-events:none}
 .logo{font-size:20px;font-weight:700;color:var(--accent);cursor:pointer}
 header nav button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px}
 header nav button.active,header nav button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+header nav button.nav-back{border-color:var(--accent);color:var(--accent);font-weight:600}
 .container{max-width:1200px;margin:0 auto;padding:20px}
 .view{display:none}.view.active{display:block}
 .section{margin-bottom:24px}.section h2{font-size:16px;margin-bottom:12px;color:var(--accent);display:flex;align-items:center;gap:8px}
@@ -147,6 +148,7 @@ body.zoomed{overflow:hidden}
     <select id="srcSelect" class="src-select" onchange="switchSource(this.value)" title="切换书源"></select>
   </div>
   <nav>
+    <button id="btnBack" class="nav-back" onclick="goBack()" title="返回上一页" style="display:none">← 返回</button>
     <button id="btnHome" class="active" onclick="navigate('home')">首页</button>
     <button id="btnCategory" onclick="navigate('category')">分类</button>
     <button id="btnSearch" onclick="navigate('search')">搜索</button>
@@ -497,7 +499,8 @@ const state = {
     category:{ categoryId:0, homeType:0, homePage:1, scrollY:0 },
     home:{ homeType:0, homePage:1, scrollY:0 },
     search:{ keyword:'', scrollY:0 }
-  }
+  },
+  navStack:[]        // 导航历史栈：返回按钮弹出栈顶恢复
 };
 
 /* ============================================================
@@ -536,6 +539,12 @@ function navigate(view){
       scrollY: window.scrollY
     };
   }
+  // 维护导航栈（返回按钮用）
+  if(prev !== view && prev !== 'home'){
+    state.navStack.push(prev);
+    // 限制栈长度，防止无限增长
+    if(state.navStack.length > 10) state.navStack.shift();
+  }
   state.view = view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   const el = document.getElementById('view-'+view);
@@ -543,6 +552,9 @@ function navigate(view){
   document.querySelectorAll('header nav button').forEach(b=>b.classList.remove('active'));
   const map = {home:'btnHome', category:'btnCategory', search:'btnSearch'};
   if(map[view]) document.getElementById(map[view]).classList.add('active');
+  // 返回按钮：有历史且不在首页时显示
+  const btnBack = document.getElementById('btnBack');
+  if(btnBack) btnBack.style.display = (state.navStack.length > 0 && view !== 'home') ? 'inline-block' : 'none';
   window.scrollTo(0,0);
   if(view !== 'reader'){
     // 阅读器状态一律清理（与是否开启连续阅读无关），避免残留；
@@ -607,6 +619,17 @@ function navigate(view){
   // 阅读器顶栏自动隐藏：进入时启用，离开时复位
   if(view === 'reader'){ enterReaderTopbar(); bindReaderMouseUI(); }
   else if(prev === 'reader'){ leaveReaderTopbar(); stopAutoScroll(); resetReaderMouseUI(); }
+}
+
+/** 返回按钮：弹出导航栈顶，恢复到上一个视图的状态 */
+function goBack(){
+  if(state.navStack.length === 0){
+    navigate('home');
+    return;
+  }
+  const prevView = state.navStack.pop();
+  // 直接调用 navigate 恢复，它会从 viewSnapshots 恢复状态
+  navigate(prevView);
 }
 
 /* ============================================================
