@@ -476,6 +476,7 @@ const state = {
   homeType:0,        // 分类页栏目 type
   categoryId:0,      // comic18 分类 id（0=全部）
   searchSort:'mr',   // comic18 搜索排序
+  searchKeyword:'', // 搜索关键词（快照恢复用）
   homePage:1,
   homeTotal:1,
   continuous:false,   // 连续阅读模式
@@ -491,7 +492,12 @@ const state = {
   autoSpeed:60,      // 自动滚动速度（像素/秒，10–300）
   autoStepMode:'px', // 自动推进方式：px 连续像素滚动 / img 逐张翻
   autoDwell:3000,    // 逐张翻模式下每张停留毫秒（500–10000）
-  showToast:true     // 是否显示「第 N 张」等轻提示
+  showToast:true,    // 是否显示「第 N 张」等轻提示
+  viewSnapshots:{    // 视图状态快照：离开时保存，返回时恢复
+    category:{ categoryId:0, homeType:0, homePage:1, scrollY:0 },
+    home:{ homeType:0, homePage:1, scrollY:0 },
+    search:{ keyword:'', scrollY:0 }
+  }
 };
 
 /* ============================================================
@@ -504,6 +510,31 @@ function navigate(view){
     updateProgressUI();   // 重算 state.viewChapIdx / viewPos（防止 rAF 节流漏掉最后一次滚动）
     savePos();
     saveHistory();
+  }
+  // 离开分类页时保存状态快照（分类、栏目、分页、滚动位置）
+  if(prev === 'category'){
+    state.viewSnapshots.category = {
+      categoryId: state.categoryId,
+      homeType: state.homeType,
+      homePage: state.homePage,
+      scrollY: window.scrollY
+    };
+  }
+  // 离开首页时保存状态快照
+  if(prev === 'home'){
+    state.viewSnapshots.home = {
+      homeType: state.homeType,
+      homePage: state.homePage,
+      scrollY: window.scrollY
+    };
+  }
+  // 离开搜索页时保存状态快照
+  if(prev === 'search'){
+    const kw = document.getElementById('searchInput');
+    state.viewSnapshots.search = {
+      keyword: kw ? kw.value : '',
+      scrollY: window.scrollY
+    };
   }
   state.view = view;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -535,9 +566,44 @@ function navigate(view){
       }
     }
   }
-  if(view==='home') renderHome();
-  if(view==='category') renderCategory();
-  if(view==='search') renderSearch();
+  if(view==='home'){
+    // 恢复首页状态快照
+    const snap = state.viewSnapshots.home;
+    if(snap){
+      state.homeType = snap.homeType;
+      state.homePage = snap.homePage;
+      renderHome();
+      requestAnimationFrame(()=>window.scrollTo(0, snap.scrollY));
+    } else {
+      renderHome();
+    }
+  }
+  if(view==='category'){
+    // 恢复分类页状态快照（分类、栏目、分页、滚动位置）
+    const snap = state.viewSnapshots.category;
+    if(snap){
+      state.categoryId = snap.categoryId;
+      state.homeType = snap.homeType;
+      state.homePage = snap.homePage;
+      renderCategory();
+      requestAnimationFrame(()=>window.scrollTo(0, snap.scrollY));
+    } else {
+      renderCategory();
+    }
+  }
+  if(view==='search'){
+    // 恢复搜索页状态快照
+    const snap = state.viewSnapshots.search;
+    if(snap){
+      state.searchKeyword = snap.keyword;
+      renderSearch();
+      const input = document.getElementById('searchInput');
+      if(input) input.value = snap.keyword;
+      requestAnimationFrame(()=>window.scrollTo(0, snap.scrollY));
+    } else {
+      renderSearch();
+    }
+  }
   // 阅读器顶栏自动隐藏：进入时启用，离开时复位
   if(view === 'reader'){ enterReaderTopbar(); bindReaderMouseUI(); }
   else if(prev === 'reader'){ leaveReaderTopbar(); stopAutoScroll(); resetReaderMouseUI(); }
@@ -640,12 +706,13 @@ function renderCategory(){
     const active = (SRC_KEY==='comic18') ? (state.categoryId===id) : (state.homeType===t.type);
     return `<button class="${active?'active':''}" onclick="setCat(${id})">${t.label}</button>`;
   }).join('');
-  state.homePage = 1;
+  // 分类页返回时保留已有分页状态；重新选择分类时再显式重置。
   loadCategory(true);
 }
-function setCat(id){
+function setCat(id, resetPage = true){
   if(SRC_KEY==='comic18'){ state.categoryId = id; }
   else { state.homeType = id; }
+  if (resetPage) state.homePage = 1;   // 重新选择分类时重置分页
   renderCategory();
 }
 /** 详情页 facets 渲染：根据源配置动态生成可点击元素 */
