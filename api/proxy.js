@@ -1329,48 +1329,26 @@ module.exports = async function handler(req, res) {
     return res.status(204).end();
   }
 
-  /* --- 临时 DEBUG：18comic API 认证方式测试 --- */
+  /* --- 临时 DEBUG：测试所有 18comic API 域名 --- */
   if (pathname === '/api/debug/comic18-chapters' && req.method === 'GET') {
     const id = sp.get('id') || '302569';
     const auth = comic18GenerateAuth();
-    const domain = COMIC18_API_DOMAINS[0];
-    const baseUrl = `https://${domain}`;
     const ua = 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36';
     const results = {};
 
-    // 测试 1: token 作为 header（当前方式）
-    try {
-      const r1 = await fetchRaw(`${baseUrl}/api/comic/${id}/chapters`, {
-        'user-agent': ua, 'token': auth.token, 'tokenparam': auth.tokenparam,
-        'referer': baseUrl + '/', 'origin': baseUrl
-      }, 15000);
-      results.headerAuth = { status: r1.status, body: r1.body.toString('utf8').substring(0, 500) };
-    } catch (e) { results.headerAuth = { error: e.message }; }
-
-    // 测试 2: token 作为 query param
-    try {
-      const r2 = await fetchRaw(`${baseUrl}/api/comic/${id}/chapters?token=${auth.token}&tokenparam=${encodeURIComponent(auth.tokenparam)}`, {
-        'user-agent': ua, 'referer': baseUrl + '/', 'origin': baseUrl
-      }, 15000);
-      results.queryAuth = { status: r2.status, body: r2.body.toString('utf8').substring(0, 500) };
-    } catch (e) { results.queryAuth = { error: e.message }; }
-
-    // 测试 3: token 同时作为 header 和 query param
-    try {
-      const r3 = await fetchRaw(`${baseUrl}/api/comic/${id}/chapters?token=${auth.token}&tokenparam=${encodeURIComponent(auth.tokenparam)}`, {
-        'user-agent': ua, 'token': auth.token, 'tokenparam': auth.tokenparam,
-        'referer': baseUrl + '/', 'origin': baseUrl
-      }, 15000);
-      results.bothAuth = { status: r3.status, body: r3.body.toString('utf8').substring(0, 500) };
-    } catch (e) { results.bothAuth = { error: e.message }; }
-
-    // 测试 4: 添加 from=android 参数
-    try {
-      const r4 = await fetchRaw(`${baseUrl}/api/comic/${id}/chapters?from=android&token=${auth.token}&tokenparam=${encodeURIComponent(auth.tokenparam)}`, {
-        'user-agent': ua, 'referer': baseUrl + '/', 'origin': baseUrl
-      }, 15000);
-      results.fromAndroid = { status: r4.status, body: r4.body.toString('utf8').substring(0, 500) };
-    } catch (e) { results.fromAndroid = { error: e.message }; }
+    for (const domain of COMIC18_API_DOMAINS) {
+      const baseUrl = `https://${domain}`;
+      try {
+        const r = await fetchRaw(`${baseUrl}/api/comic/${id}/chapters`, {
+          'user-agent': ua, 'token': auth.token, 'tokenparam': auth.tokenparam,
+          'referer': baseUrl + '/', 'origin': baseUrl
+        }, 15000);
+        const body = r.body.toString('utf8');
+        results[domain] = { status: r.status, body: body.substring(0, 800) };
+      } catch (e) {
+        results[domain] = { error: e.message };
+      }
+    }
 
     return res.json({ debug: { token: auth.token, tokenparam: auth.tokenparam }, results });
   }
