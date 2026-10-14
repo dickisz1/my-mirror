@@ -500,19 +500,39 @@ const state = {
     home:{ homeType:0, homePage:1, scrollY:0 },
     search:{ keyword:'', scrollY:0 }
   },
-  navStack:[]        // 导航历史栈：返回按钮弹出栈顶恢复
+  navStack:[],       // 导航历史栈：帧结构 { view, scrollTop, params }
+  lastChapIdx:0      // 阅读器最后看的话数（返回详情时定位用）
 };
 
 /* ============================================================
  * 四、导航
  * ============================================================ */
-function navigate(view){
+/** 捕获当前视图的参数（用于栈帧恢复） */
+function captureParams(view){
+  if(view === 'category'){
+    return { categoryId: state.categoryId, homeType: state.homeType, homePage: state.homePage };
+  }
+  if(view === 'home'){
+    return { homeType: state.homeType, homePage: state.homePage };
+  }
+  if(view === 'search'){
+    const kw = document.getElementById('searchInput');
+    return { keyword: kw ? kw.value : '' };
+  }
+  if(view === 'reader'){
+    return { chapIdx: state.lastChapIdx };
+  }
+  return {};
+}
+function navigate(view, opts = {}){
   const prev = state.view;
+  const scrollTop = window.scrollY;
   // 离开阅读器：先重算并落盘阅读进度（话号 + 话内位置），再清理状态
   if(prev === 'reader' && view !== 'reader'){
     updateProgressUI();   // 重算 state.viewChapIdx / viewPos（防止 rAF 节流漏掉最后一次滚动）
     savePos();
     saveHistory();
+    state.lastChapIdx = state.viewChapIdx;   // 记录最后看的话数
   }
   // 离开分类页时保存状态快照（分类、栏目、分页、滚动位置）
   if(prev === 'category'){
@@ -520,7 +540,7 @@ function navigate(view){
       categoryId: state.categoryId,
       homeType: state.homeType,
       homePage: state.homePage,
-      scrollY: window.scrollY
+      scrollY: scrollTop
     };
   }
   // 离开首页时保存状态快照
@@ -528,7 +548,7 @@ function navigate(view){
     state.viewSnapshots.home = {
       homeType: state.homeType,
       homePage: state.homePage,
-      scrollY: window.scrollY
+      scrollY: scrollTop
     };
   }
   // 离开搜索页时保存状态快照
@@ -536,12 +556,30 @@ function navigate(view){
     const kw = document.getElementById('searchInput');
     state.viewSnapshots.search = {
       keyword: kw ? kw.value : '',
-      scrollY: window.scrollY
+      scrollY: scrollTop
     };
   }
   // 维护导航栈（返回按钮用）
-  if(prev !== view && prev !== 'home'){
-    state.navStack.push(prev);
+  // replace 模式：替换栈顶（阅读器章节切换，不增加返回步数）
+  // tab 切换：清空栈（tab 是平行入口，不是子级）
+  const isTabSwitch = (view === 'home' || view === 'category' || view === 'search') &&
+                      (prev === 'home' || prev === 'category' || prev === 'search');
+  if(isTabSwitch){
+    state.navStack = [];   // tab 切换清空栈
+  } else if(opts.replace && state.navStack.length > 0){
+    // replace 模式：替换栈顶
+    state.navStack[state.navStack.length - 1] = {
+      view: prev,
+      scrollTop: scrollTop,
+      params: captureParams(prev)
+    };
+  } else if(prev !== view && prev !== 'home'){
+    // 正常模式：压栈
+    state.navStack.push({
+      view: prev,
+      scrollTop: scrollTop,
+      params: captureParams(prev)
+    });
     // 限制栈长度，防止无限增长
     if(state.navStack.length > 10) state.navStack.shift();
   }
@@ -627,9 +665,25 @@ function goBack(){
     navigate('home');
     return;
   }
-  const prevView = state.navStack.pop();
-  // 直接调用 navigate 恢复，它会从 viewSnapshots 恢复状态
-  navigate(prevView);
+  const frame = state.navStack.pop();
+  const { view, scrollTop, params } = frame;
+  // 恢复视图参数
+  if(view === 'category' && params.categoryId !== undefined){
+    state.categoryId = params.categoryId;
+    state.homeType = params.homeType || 0;
+    state.homePage = params.homePage || 1;
+  } else if(view === 'home' && params.homeType !== undefined){
+    state.homeType = params.homeType;
+    state.homePage = params.homePage || 1;
+  } else if(view === 'search' && params.keyword !== undefined){
+    state.searchKeyword = params.keyword;
+  }
+  // 切换到目标视图
+  navigate(view);
+  // 恢复滚动位置
+  if(scrollTop > 0){
+    requestAnimationFrame(()=>window.scrollTo(0, scrollTop));
+  }
 }
 
 /* ============================================================
@@ -903,7 +957,7 @@ async function openChapter(idx){
   if(!ch) return;
   state.chapIdx = idx;
   state.viewChapIdx = idx;
-  navigate('reader');
+  navigate('reader', { replace: true });   // 章节切换不增加栈深度
   document.getElementById('readerTitle').textContent = state.comic ? state.comic.title : '';
   document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
   const area = document.getElementById('readerArea');
@@ -1018,7 +1072,17 @@ function scheduleFitReaderTop(){
 /** 返回详情页（Pixiv ③「关闭阅读器回到作品详情」的对应实现）。
  *  进度已在 navigate 的离开分支落盘，这里只负责切视图。 */
 function backToDetail(){
-  if(state.comic && state.comic.id != null) navigate('detail');
+  if(state.comic && state.comic.id != null){
+    navigate('detail');
+    // 返回详情时定位到最后看的话
+    if(state.lastChapIdx > 0 && state.chapters && state.chapters.length > state.lastChapIdx){
+      const target = state.chapters[state.lastChapIdx];
+      if(target){
+        const el = document.querySelector(`.chap-item[onclick*="${target.id}"]`);
+        if(el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }
   else navigate('home');
 }
 
