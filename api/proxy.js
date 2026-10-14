@@ -1329,7 +1329,7 @@ module.exports = async function handler(req, res) {
   }
 
   /* --- 临时 DEBUG：18comic API 原始返回 --- */
-  if (pathname === '/debug/comic18-chapters' && req.method === 'GET') {
+  if (pathname === '/api/debug/comic18-chapters' && req.method === 'GET') {
     const id = sp.get('id');
     if (!id) return res.status(400).json({ error: 'id required' });
     try {
