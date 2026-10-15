@@ -1354,6 +1354,22 @@ module.exports = async function handler(req, res) {
     return res.json({ debug: { token: auth.token, tokenparam: auth.tokenparam }, results });
   }
 
+  /* --- DEBUG：部署指纹 + 配置快照 --- */
+  if (pathname === '/api/debug/build-info' && req.method === 'GET') {
+    const homeRule = SOURCES.comic18.rules.home;
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    return res.json({
+      sha: process.env.VERCEL_GIT_COMMIT_SHA || 'unknown',
+      nodeEnv: process.env.NODE_ENV,
+      homeRule: {
+        params: homeRule.params,
+        paramMap: homeRule.paramMap || null,
+        paramDefaults: homeRule.paramDefaults || null,
+      },
+      ts: Date.now(),
+    });
+  }
+
   /* --- 任务队列：短轮询四个端点 --- */
   // 前端：创建任务
   if (pathname === '/task' && req.method === 'GET') {
