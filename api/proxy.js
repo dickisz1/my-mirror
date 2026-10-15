@@ -1370,6 +1370,22 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  /* --- DEBUG：验证 buildUpstreamQuery 实际输出 --- */
+  if (pathname === '/api/debug/query-mapping' && req.method === 'GET') {
+    const homeRule = SOURCES.comic18.rules.home;
+    const q = buildUpstreamQuery(homeRule, sp, null);
+    const upPath = fillPath(homeRule.path, {});
+    const upstream = SOURCES.comic18.baseUrl + upPath + (q ? '?' + q : '');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      sha: process.env.VERCEL_GIT_COMMIT_SHA || 'unknown',
+      input_query: sp.toString(),
+      type_param: sp.get('type'),
+      upstream_query: q,
+      upstream_url: upstream,
+    });
+  }
+
   /* --- 任务队列：短轮询四个端点 --- */
   // 前端：创建任务
   if (pathname === '/task' && req.method === 'GET') {
