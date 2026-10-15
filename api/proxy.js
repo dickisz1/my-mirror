@@ -279,6 +279,7 @@ const SOURCES = {
         frontPath: '/api/home',
         path: '/categories/filter',
         params: ['page', 'pageSize', 'o', 't'],
+        paramMap: { type: 'c' },   // 前端 type → 上游 c（18comic 分类过滤参数）
         paramDefaults: { o: 'mv' },
         match: /^\/api\/home$/
       },
