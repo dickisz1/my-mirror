@@ -417,9 +417,9 @@ async function apiGet(path, params){
  *  - 其他源：走 proxy 转发（带 src，避免多源串图） */
 function toProxyPath(u, orig){
   if(!u) return '';
-  // 18comic 图片：直连 CDN，不走 proxy（主域名 403，CDN 主机才 200）
+  // 18comic 图片：CDN 无 CORS 头，走图片代理端点
   const ir = BOOK_SOURCES && BOOK_SOURCES.imageRule;
-  if(ir && ir.direct && /^https?:\/\//i.test(u)) return u;
+  if(ir && ir.direct && /^https?:\/\//i.test(u)) return '/api/image?url=' + encodeURIComponent(u);
   // 其他源：走 proxy 转发
   let p = u;
   if(/^https?:\/\//i.test(u)){

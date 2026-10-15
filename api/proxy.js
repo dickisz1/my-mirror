@@ -1354,6 +1354,44 @@ module.exports = async function handler(req, res) {
     return res.json({ debug: { token: auth.token, tokenparam: auth.tokenparam }, results });
   }
 
+  /* --- 图片代理：CDN 无 CORS 头，通过 proxy 转发图片字节 --- */
+  if (pathname === '/api/image' && req.method === 'GET') {
+    const imgUrl = url.searchParams.get('url');
+    if (!imgUrl) {
+      setCors(res);
+      return res.status(400).json({ error: 'missing url param' });
+    }
+    try {
+      const u = new URL(imgUrl);
+      const allowedDomains = [
+        'cdn-msp.jmapiproxy1.cc',
+        'cdn-msp.jmapiproxy2.cc',
+        'cdn-msp2.jmapiproxy2.cc',
+        'cdn-msp3.jmapiproxy2.cc',
+        'cdn-msp.jmapinodeudzn.net',
+        'cdn-msp3.jmapinodeudzn.net',
+      ];
+      if (!allowedDomains.includes(u.hostname)) {
+        setCors(res);
+        return res.status(403).json({ error: 'domain not allowed' });
+      }
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
+        'Referer': 'https://' + u.hostname + '/',
+        'Origin': 'https://' + u.hostname,
+        'Accept': '*/*',
+      };
+      const r = await fetchRaw(imgUrl, headers, 15000);
+      setCors(res);
+      res.setHeader('Content-Type', r.headers['content-type'] || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.status(r.status).send(r.body);
+    } catch (e) {
+      setCors(res);
+      return res.status(502).json({ error: e.message });
+    }
+  }
+
   /* --- DEBUG：部署指纹 + 配置快照 --- */
   if (pathname === '/api/debug/build-info' && req.method === 'GET') {
     const homeRule = SOURCES.comic18.rules.home;
