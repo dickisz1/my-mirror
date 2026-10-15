@@ -1392,8 +1392,8 @@ module.exports = async function handler(req, res) {
     const rule = src.rules.home;
 
     const baseParams = { page: '1', pageSize: '12', o: 'mv' };
-    const q0 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, c: '0' }), null);
-    const q8 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, c: '8' }), null);
+    const q0 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, type: '0' }), null);
+    const q8 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, type: '8' }), null);
     const url0 = src.baseUrl + rule.path + (q0 ? '?' + q0 : '');
     const url8 = src.baseUrl + rule.path + (q8 ? '?' + q8 : '');
 
