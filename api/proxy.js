@@ -1386,42 +1386,51 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  /* --- DEBUG：直接请求 18comic API，对比 c=8 和 c=0 --- */
+  /* --- DEBUG：复用 home action 请求逻辑，对比 c=8 vs c=0 上游原始响应 --- */
   if (pathname === '/api/debug/api-compare' && req.method === 'GET') {
-    const auth = comic18GenerateAuth();
-    const ua = 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36';
-    const results = {};
-    
-    for (const c of ['8', '0']) {
-      const url = `https://18comic.vip/categories/filter?page=1&pageSize=12&o=mv&order=&c=${c}`;
-      try {
-        const r = await fetchRaw(url, {
-          'user-agent': ua,
-          'token': auth.token,
-          'tokenparam': auth.tokenparam,
-          'referer': 'https://18comic.vip/',
-          'origin': 'https://18comic.vip',
-        }, 15000);
-        const body = r.body.toString('utf8');
-        const j = JSON.parse(body);
-        results[`c=${c}`] = {
-          status: r.status,
-          code: j.code,
-          errorMsg: j.errorMsg || null,
-          data_type: typeof j.data,
-          data_length: typeof j.data === 'string' ? j.data.length : (Array.isArray(j.data) ? j.data.length : null),
-        };
-      } catch (e) {
-        results[`c=${c}`] = { error: e.message };
-      }
-    }
-    
+    const src = SOURCES.comic18;
+    const rule = src.rules.home;
+
+    const baseParams = { page: '1', pageSize: '12', o: 'mv' };
+    const q0 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, c: '0' }), null);
+    const q8 = buildUpstreamQuery(rule, new URLSearchParams({ ...baseParams, c: '8' }), null);
+    const url0 = src.baseUrl + rule.path + (q0 ? '?' + q0 : '');
+    const url8 = src.baseUrl + rule.path + (q8 ? '?' + q8 : '');
+
+    // 复用 home action 的 headers 构造
+    const headers = upstreamHeaders(src, req);
+
+    const [r0, r8] = await Promise.all([
+      fetchRaw(url0, headers, 15000),
+      fetchRaw(url8, headers, 15000),
+    ]);
+
+    const t0 = r0.body.toString('utf8');
+    const t8 = r8.body.toString('utf8');
+
+    const parse = s => { try { return JSON.parse(s); } catch { return null; } };
+    const isCF = s => /cloudflare|challenge|checking your browser|cf-ray/i.test(s);
+    const j0 = parse(t0);
+    const j8 = parse(t8);
+
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       sha: process.env.VERCEL_GIT_COMMIT_SHA || 'unknown',
-      token: auth.token,
-      tokenparam: auth.tokenparam,
-      results,
+      url0,
+      url8,
+      status: [r0.status, r8.status],
+      cfChallenge: [isCF(t0), isCF(t8)],
+      len: [t0.length, t8.length],
+      identical: t0 === t8,
+      diff: (j0 && j8) ? {
+        code: [j0.code, j8.code],
+        errorMsg: [j0.errorMsg, j8.errorMsg],
+        total: [j0.data?.total, j8.data?.total],
+        firstId0: j0.data?.list?.[0]?.id,
+        firstId8: j8.data?.list?.[0]?.id,
+      } : null,
+      preview0: t0.slice(0, 500),
+      preview8: t8.slice(0, 500),
     });
   }
 
