@@ -385,7 +385,7 @@ body.zoomed{overflow:hidden}
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div id="readerHint" style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单</div>
+    <div id="readerHint" style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单 ｜ 看图态: 双击/Ctrl+滚轮 缩放 · 拖拽 平移 · Esc 退出</div>
   </div>
 </div>
 
@@ -2756,7 +2756,8 @@ function syncReadModeUI(){
   const hint = document.getElementById('readerHint');
   if(hint) hint.textContent = paged
     ? '键盘: ←→ 翻页（RTL 时方向相反）· 空格 下一页 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 左/右=翻页 中=放大 · 右键菜单'
-    : '键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单';
+    : '键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单'
+    + ' ｜ 看图态: 双击/Ctrl+滚轮 缩放 · 拖拽 平移 · Esc 退出';
 }
 
 /** 当前屏第一张已渲染图片的宽高比（w/h）。拿不到返回 null。
