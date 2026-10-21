@@ -35,6 +35,18 @@ const UA =
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 /* ============================================================
+ * 运维开关（默认全关）
+ * ------------------------------------------------------------
+ * 两者都是历史遗留能力的开关，comic18 主链路已不使用：
+ *   - 任务队列（/task /claim /status /callback）：上一代 worker 方案，
+ *     /callback 无鉴权、可按 task_id 写入任意结果，默认关闭（返回 410）。
+ *   - 调试端点（/api/debug/*）：会吐签名 token 与上游原始响应，默认 404。
+ * 需要时在 Vercel 环境变量里显式打开，不要默认开启。
+ * ============================================================ */
+const TASK_QUEUE_ENABLED = process.env.ENABLE_TASK_QUEUE === '1';
+const DEBUG_ENABLED = process.env.ENABLE_DEBUG_ENDPOINTS === '1';
+
+/* ============================================================
  * 一、书源注册表
  * 新增源 = 在此加一项；前端通过 /api/sources 拿列表，
  * 通过 /api/source/rules?src=<key> 拿该源完整规则。
@@ -278,9 +290,13 @@ const SOURCES = {
         desc: '列表',
         frontPath: '/api/home',
         path: '/categories/filter',
-        params: ['page', 'pageSize', 'o', 't'],
-        paramMap: { type: 'c' },   // 前端 type → 上游 c（18comic 分类过滤参数）
+        /* 只放上游**实测有效**的参数（见 AGENTS.md「分类/排序实测」表）：
+         *   page 有效；o 有效（4 个值）；page_size / c / t 均被上游忽略。
+         * 早先的 paramMap {type:'c'} 是照 jmcomic Python 库抄的，实测这个
+         * App API 节点（2.1.7）对 c 完全不认，留着只会让人误以为能按分类过滤。 */
+        params: ['page', 'o'],
         paramDefaults: { o: 'mv' },
+        paramWhitelist: { o: ['mr', 'mv', 'mp', 'tf'] },
         match: /^\/api\/home$/
       },
 
@@ -288,10 +304,22 @@ const SOURCES = {
         desc: '搜索',
         frontPath: '/api/search',
         path: '/search',
-        params: ['keyword', 'page', 'o', 't'],
+        params: ['keyword', 'page', 'o', 'main_tag'],
         paramMap: { keyword: 'search_query' },
-        paramDefaults: { main_tag: '0', o: 'mr', t: '' },
+        paramDefaults: { main_tag: '0', o: 'mr' },
+        paramWhitelist: { o: ['mr', 'mv', 'mp', 'tf'] },
         match: /^\/api\/search$/
+      },
+
+      /* 分类树 + 标签块：上游 /categories 一次给全（10 个大类含子分类、4 组共 47 个标签）。
+       * 前端不再硬编码分类表 —— 早期硬编码的 12 项里，id 7 之后全错
+       * （真实 7=Cosplay、8=3D、9=禁漫汉化组，根本没有「古风/玄幻/校园/悬疑/恐怖/搞笑」）。 */
+      categories: {
+        desc: '分类树 + 标签块',
+        frontPath: '/api/categories',
+        path: '/categories',
+        params: [],
+        match: /^\/api\/categories$/
       },
       detail: {
         desc: '作品详情',
@@ -466,8 +494,13 @@ function setCors(res) {
 
 /* ---- 前端界面读取（第二步） ---- */
 let _htmlCache = null;
+/* 生产环境把 HTML 缓存在内存里省一次 fs 读；但本地调 UI 时这个缓存很坑——
+   改了 manga_reader.html 后不重启进程，浏览器拿到的还是旧版，容易误判成
+   「代码没生效」。dev-server.js 会置 DEV_RELOAD_HTML=1 关掉缓存。 */
+const HTML_NO_CACHE = process.env.DEV_RELOAD_HTML === '1';
+
 function readFrontend() {
-  if (_htmlCache) return _htmlCache;
+  if (_htmlCache && !HTML_NO_CACHE) return _htmlCache;
   const candidates = [
     path.join(process.cwd(), 'manga_reader.html'),
     path.join(__dirname, '..', 'manga_reader.html'),
@@ -475,8 +508,9 @@ function readFrontend() {
   ];
   for (let i = 0; i < candidates.length; i++) {
     try {
-      _htmlCache = fs.readFileSync(candidates[i], 'utf8');
-      return _htmlCache;
+      const html = fs.readFileSync(candidates[i], 'utf8');
+      _htmlCache = html;
+      return html;
     } catch (e) { /* 试下一个 */ }
   }
   return null;
@@ -548,6 +582,20 @@ function buildUpstreamQuery(rule, query, extraParams) {
   if (extraParams) {
     Object.keys(extraParams).forEach(k => out.set(k, extraParams[k]));
   }
+
+  /* 3) 取值白名单：上游对非法值**不报错**，而是返回垃圾数据。
+   *    实测 18comic 的 o=tr / o=md / o=随便写 会返回 65536、262144、1441792
+   *    这类移位后的 id（真实 id 不可能是 2 的幂），前端会渲染出一堆点不进去的卡片。
+   *    所以非法值必须在这里丢掉，并回落到 paramDefaults。 */
+  const wl = rule.paramWhitelist || {};
+  Object.keys(wl).forEach(k => {
+    if (!out.has(k)) return;
+    const allowed = wl[k] || [];
+    if (allowed.indexOf(out.get(k)) < 0) {
+      if (defaults[k] !== undefined) out.set(k, defaults[k]);
+      else out.delete(k);
+    }
+  });
   return out.toString();
 }
 
@@ -668,14 +716,136 @@ function isComic18(src) {
  *   tokenparam = ts + ',' + APP_VERSION
  * 
  * 响应格式：{ code: 200, data: "<AES加密>" }
- * AES 解密：key = md5(APP_DATA_SECRET), iv = 前16字节, CBC 模式
+ * AES 解密：aes-256-ecb，key = md5(ts + APP_DATA_SECRET) 的 UTF-8 字节（32B），无 IV
+ *           （早期注释误写为 CBC + 前 16 字节 IV，与实现不符，已订正）
  */
-const COMIC18_API_DOMAINS = [
-  'www.cdnhjk.net',
-  'www.cdngwc.cc',
-  'www.cdngwc.net',
-  'www.cdngwc.club'
+/* 18comic API 域名池。
+ * 实测（2026-10）：www.cdnhjk.net / www.cdngwc.net / www.cdngwc.club 返回 200 加密 JSON；
+ *                  www.cdngwc.cc 已失效（官方列表也已移除）。
+ * 这些域名不经过 Cloudflare 盾（与主站 18comic.vip 不同），是绕盾的关键。
+ * 运维可用 COMIC18_API_DOMAINS=a.com,b.com 覆盖，覆盖后不再自动更新。
+ */
+const COMIC18_API_DOMAINS = (process.env.COMIC18_API_DOMAINS
+  ? process.env.COMIC18_API_DOMAINS.split(',').map(s => s.trim()).filter(Boolean)
+  : [
+      'www.cdnhjk.net',
+      'www.cdnutc.me',
+      'www.cdngwc.net',
+      'www.cdngwc.club'
+    ]);
+
+/* ---- 官方域名更新源（与 jmcomic 同一套机制）----
+ * 三个字节 TOS 地址存的是 AES-256-ECB 加密的 JSON，解出来是当前有效的 API 域名。
+ * 算法：base64 → key=md5('' + secret) 的 UTF-8 字节 → aes-256-ecb → 去 PKCS 填充 → JSON
+ * 这样域名池能自动跟随官方，域名失效时不需要改代码重新部署。
+ */
+const COMIC18_DOMAIN_SERVER_URLS = [
+  'https://rup4a04-c01.tos-ap-southeast-1.bytepluses.com/newsvr-2025.txt',
+  'https://rup4a04-c02.tos-cn-hongkong.bytepluses.com/newsvr-2025.txt',
+  'https://rup4a04-c03.tos-cn-beijing.bytepluses.com.cn/newsvr-2025.txt'
 ];
+const COMIC18_DOMAIN_SERVER_SECRET = 'diosfjckwpqpdfjkvnqQjsik';
+const COMIC18_DOMAIN_TTL_MS = 30 * 60 * 1000;
+
+/* 进程内域名池：内置列表打底，官方源刷新后替换 */
+const comic18DomainPool = {
+  list: COMIC18_API_DOMAINS.slice(),
+  updatedAt: 0,      // 0 = 从未成功刷新
+  refreshing: null   // 单飞：同一时刻只允许一个刷新在跑
+};
+
+/** 解密官方域名源的响应体 */
+function comic18DecodeDomainServer(text) {
+  let s = String(text || '').replace(/^\uFEFF/, '').trim();
+  while (s && s.charCodeAt(0) > 127) s = s.slice(1);   // 去掉开头的非 ASCII 字节
+  const buf = Buffer.from(s, 'base64');
+  const key = Buffer.from(
+    crypto.createHash('md5').update('' + COMIC18_DOMAIN_SERVER_SECRET, 'utf8').digest('hex'),
+    'utf8'
+  );
+  const d = crypto.createDecipheriv('aes-256-ecb', key, null);
+  d.setAutoPadding(false);
+  let out = Buffer.concat([d.update(buf), d.final()]);
+  const pad = out[out.length - 1];
+  if (pad > 0 && pad <= 16) out = out.subarray(0, out.length - pad);
+  return JSON.parse(out.toString('utf8'));
+}
+
+/** 拉取并更新域名池；失败静默保留旧列表（不能因为更新失败就断服务） */
+async function comic18RefreshDomainPool() {
+  for (let i = 0; i < COMIC18_DOMAIN_SERVER_URLS.length; i++) {
+    const url = COMIC18_DOMAIN_SERVER_URLS[i];
+    try {
+      const r = await fetchRaw(url, { 'user-agent': UA }, 8000);
+      if (r.status !== 200 || !r.body || !r.body.length) continue;
+      const j = comic18DecodeDomainServer(r.body.toString('utf8'));
+      /* 官方返回两个字段：
+       *   Server     —— 标准线路
+       *   jm3_Server —— 带线路名的扩展列表（形如 [["www.cdnutc.me","線路5"], ...]），
+       *                 其中有 Server 里没有的域名（如 www.cdnutc.me），必须一起收。 */
+      const official = []
+        .concat(Array.isArray(j && j.Server) ? j.Server : [])
+        .concat(
+          Array.isArray(j && j.jm3_Server)
+            ? j.jm3_Server.map(x => (Array.isArray(x) ? x[0] : x))
+            : []
+        )
+        .filter(Boolean);
+      if (!official.length) continue;
+      /* 官方域名在前，内置列表补在后面兜底；去重 */
+      const merged = official.concat(COMIC18_API_DOMAINS).filter((d, idx, arr) => arr.indexOf(d) === idx);
+      comic18DomainPool.list = merged;
+      comic18DomainPool.updatedAt = Date.now();
+      console.log('[proxy] comic18 域名池已更新:', merged.join(','));
+      return merged;
+    } catch (e) {
+      /* 换下一个源 */
+    }
+  }
+  comic18DomainPool.updatedAt = Date.now(); // 避免每次请求都重试失败源
+  return null;
+}
+
+/** 过期则后台刷新（不阻塞当前请求，下次请求生效） */
+function comic18MaybeRefreshDomains() {
+  if (process.env.COMIC18_API_DOMAINS) return;          // 运维显式接管，不自动改
+  if (comic18DomainPool.refreshing) return;
+  if (Date.now() - comic18DomainPool.updatedAt < COMIC18_DOMAIN_TTL_MS) return;
+  comic18DomainPool.refreshing = comic18RefreshDomainPool()
+    .catch(() => null)
+    .then(() => { comic18DomainPool.refreshing = null; });
+}
+
+/* 域名健康记忆（进程内，Serverless 实例复用期间有效）
+ * 失败域名进入冷却，后续请求优先走健康域名，避免每次请求都先撞一个死域名。 */
+const COMIC18_DOMAIN_COOLDOWN_MS = 60 * 1000;
+const comic18DomainHealth = new Map(); // domain -> { downUntil, fails, lastError }
+
+/** 按健康度排序：未冷却的在前，冷却中的按解冻时间升序垫底 */
+function comic18OrderedDomains() {
+  const now = Date.now();
+  return comic18DomainPool.list.slice().sort((a, b) => {
+    const ha = comic18DomainHealth.get(a);
+    const hb = comic18DomainHealth.get(b);
+    const da = ha && ha.downUntil > now ? ha.downUntil : 0;
+    const db = hb && hb.downUntil > now ? hb.downUntil : 0;
+    return da - db;
+  });
+}
+
+function comic18MarkOk(domain) {
+  const h = comic18DomainHealth.get(domain);
+  if (h) comic18DomainHealth.delete(domain);
+}
+
+function comic18MarkDown(domain, err) {
+  const prev = comic18DomainHealth.get(domain) || { fails: 0 };
+  comic18DomainHealth.set(domain, {
+    fails: prev.fails + 1,
+    downUntil: Date.now() + COMIC18_DOMAIN_COOLDOWN_MS,
+    lastError: String((err && err.message) || err || 'unknown')
+  });
+}
 const COMIC18_APP_TOKEN_SECRET = '185Hcomic3PAPP7R';
 const COMIC18_APP_DATA_SECRET = '185Hcomic3PAPP7R';
 const COMIC18_APP_VERSION = '2.1.7';
@@ -743,41 +913,68 @@ function comic18Filename(url) {
   return m ? m[1] : '';
 }
 
-/** comic18 直连请求（带签名 + 解密） */
+/** comic18 直连请求（带签名 + 解密 + 域名池轮换） */
 async function comic18Fetch(path, query, opts) {
   opts = opts || {};
-  const domain = COMIC18_API_DOMAINS[0];
+  comic18MaybeRefreshDomains();   // 后台刷新域名池，不阻塞本次请求
   const auth = comic18GenerateAuth();
-  
-  const baseUrl = `https://${domain}`;
-  const headers = {
-    'Accept-Encoding': 'identity',
-    'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
-    'token': auth.token,
-    'tokenparam': auth.tokenparam,
-    'referer': baseUrl + '/',
-    'origin': baseUrl
-  };
+  const domains = comic18OrderedDomains();
+  const tried = [];
 
-  const url = `${baseUrl}${path}${query ? '?' + query : ''}`;
-  const r = await fetchRaw(url, headers, 15000);
-  
-  if (r.status !== 200) {
-    throw new Error(`comic18 API HTTP ${r.status}`);
+  let r = null;
+  let bodyStr = null;
+  let usedDomain = null;
+
+  for (let i = 0; i < domains.length; i++) {
+    const domain = domains[i];
+    const baseUrl = `https://${domain}`;
+    const headers = {
+      'Accept-Encoding': 'identity',
+      'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
+      'token': auth.token,
+      'tokenparam': auth.tokenparam,
+      'referer': baseUrl + '/',
+      'origin': baseUrl
+    };
+
+    const url = `${baseUrl}${path}${query ? '?' + query : ''}`;
+    try {
+      const resp = await fetchRaw(url, headers, 15000);
+      if (resp.status !== 200) {
+        const snippet = resp.body ? resp.body.toString('utf8').slice(0, 120).replace(/\s+/g, ' ') : '';
+        tried.push(`${domain}:HTTP${resp.status}${snippet ? ' ' + snippet : ''}`);
+        /* 只有「域名级故障」才进冷却：403（多半是上了 CF 盾）与 5xx。
+         * 404 等业务错误不冷却，否则一次查不存在的 id 会把健康域名全拉黑。 */
+        if (resp.status === 403 || resp.status >= 500) {
+          comic18MarkDown(domain, new Error('HTTP ' + resp.status));
+        }
+        continue;
+      }
+      r = resp;
+      bodyStr = resp.body.toString('utf8');
+      usedDomain = domain;
+      comic18MarkOk(domain);
+      break;
+    } catch (e) {
+      tried.push(`${domain}:${e.message}`);
+      comic18MarkDown(domain, e);
+    }
   }
-  
-  const bodyStr = r.body.toString('utf8');
-  
+
+  if (!r) {
+    throw new Error(`comic18 API 全部域名失败: ${tried.join(' | ')}`);
+  }
+
   // raw 模式：直接返回原始 body（用于 /chapter_view_template 等 HTML 响应）
   if (opts.raw) {
-    return { raw: bodyStr, status: r.status };
+    return { raw: bodyStr, status: r.status, domain: usedDomain };
   }
-  
+
   let j = null;
   try { j = JSON.parse(bodyStr); } catch (e) { j = null; }
-  
+
   if (!j || j.code !== 200) {
-    throw new Error(`comic18 API 返回异常: ${bodyStr.substring(0, 200)}`);
+    throw new Error(`comic18 API 返回异常(${usedDomain}): ${bodyStr.substring(0, 200)}`);
   }
   
   // 解密 data 字段（key 依赖 ts）
@@ -852,6 +1049,63 @@ function serveSources(res) {
 }
 
 /** 第三步-A：按书源规则取数据 */
+/* ============================================================
+ * 上游 JSON 短缓存（详情页双请求去重）
+ * ------------------------------------------------------------
+ * 前端 openDetail() 会先后请求 /api/comic/{id} 和 /api/comic/{id}/chapters，
+ * 而 comic18 的 detail 与 chapters 两条规则**都映射到 /album?id=**，
+ * 等于同一份数据打两次上游（每次约 0.9s）。这里给上游 JSON 加 20s TTL
+ * + 并发合流：第二个请求直接命中，省掉一次跨洋往返。
+ *
+ * 只缓存「上游原始响应字符串」，每次请求再 parse 一份新对象 —— 因为
+ * serveData 拿到对象后会就地改写（j.data.list / j.data.images 等），
+ * 直接缓存对象会让第二次请求读到被上一轮改写过的脏数据。
+ *
+ * UPSTREAM_CACHE_TTL_MS=0 可整体关闭（排查「数据不更新」类问题时的第一开关）。
+ * ============================================================ */
+const UPSTREAM_CACHE_TTL_MS = Number(process.env.UPSTREAM_CACHE_TTL_MS || 20000);
+const UPSTREAM_CACHE_MAX = 200;
+const upstreamCache = new Map();     // key -> { at, ttl, json }
+const upstreamInflight = new Map();  // key -> Promise
+
+function upstreamCacheSet(key, json, ttl) {
+  if (UPSTREAM_CACHE_TTL_MS <= 0) return;
+  upstreamCache.set(key, { at: Date.now(), ttl: ttl, json: json });
+  if (upstreamCache.size <= UPSTREAM_CACHE_MAX) return;
+  const now = Date.now();
+  for (const entry of upstreamCache) {
+    const k = entry[0], v = entry[1];
+    if (now - v.at > (v.ttl || UPSTREAM_CACHE_TTL_MS)) upstreamCache.delete(k);
+  }
+  // Map 保持插入顺序，超限时从最旧的开始删
+  while (upstreamCache.size > UPSTREAM_CACHE_MAX) {
+    upstreamCache.delete(upstreamCache.keys().next().value);
+  }
+}
+
+/** fn 必须返回**字符串**（JSON 文本），返回值也是字符串 */
+async function withUpstreamCache(key, fn, ttl) {
+  const life = ttl || UPSTREAM_CACHE_TTL_MS;
+  if (UPSTREAM_CACHE_TTL_MS <= 0) return fn();
+  const hit = upstreamCache.get(key);
+  if (hit) {
+    if (Date.now() - hit.at <= (hit.ttl || UPSTREAM_CACHE_TTL_MS)) return hit.json;
+    upstreamCache.delete(key);
+  }
+  if (upstreamInflight.has(key)) return upstreamInflight.get(key);
+  const p = (async () => {
+    try {
+      const json = await fn();
+      upstreamCacheSet(key, json, life);
+      return json;
+    } finally {
+      upstreamInflight.delete(key);
+    }
+  })();
+  upstreamInflight.set(key, p);
+  return p;
+}
+
 async function serveData(src, action, rule, target, query, req, res) {
   /* ---- comic18：直连反代（不经任务队列） ---- */
   if (isComic18(src)) {
@@ -869,7 +1123,43 @@ async function serveData(src, action, rule, target, query, req, res) {
         });
       }
       const allQ = [upQuery].concat(extraQ.filter(Boolean)).join('&');
-      const j = await comic18Fetch(upPath, allQ);
+      /* 分类树变化极慢（官方一天也改不了几次），给 30 分钟；
+       * 其余（列表/详情/章节/图片）用默认 20s，只为吃掉详情页那次重复请求。 */
+      const cacheKey = 'c18|' + upPath + '|' + allQ;
+      const cacheTtl = (action === 'categories') ? 30 * 60 * 1000 : 0;
+      const j = JSON.parse(await withUpstreamCache(
+        cacheKey,
+        async () => JSON.stringify(await comic18Fetch(upPath, allQ)),
+        cacheTtl
+      ));
+
+      /* 分类树 + 标签块：/categories 原始结构是
+       *   { categories: [{id,name,slug,type,total_albums,sub_categories:[{CID,name,slug}]}],
+       *     blocks: [{title, content:[标签名…]}] }
+       * 这里把 CID/type/total_albums 这些上游命名改成前端统一的小写字段。 */
+      if (action === 'categories' && j.data && Array.isArray(j.data.categories)) {
+        const cats = j.data.categories.map(c => ({
+          id: String(c.id),
+          name: c.name || '',
+          slug: c.slug || '',
+          /* type 是「怎么查这个分类」的关键：
+           *   'slug'   → 官方网页按分类过滤
+           *   'search' → 官方自己也是拿 slug 去搜索（Cosplay / 3D / 禁漫汉化组）
+           * 本 App API 的 c 参数被忽略，所以两条路在前端都统一走关键词搜索。 */
+          type: c.type || 'slug',
+          total: Number(c.total_albums) || 0,
+          subs: (c.sub_categories || []).map(s => ({
+            id: String(s.CID || ''),
+            name: s.name || '',
+            slug: s.slug || ''
+          }))
+        })).filter(c => c.name);
+        const blocks = (j.data.blocks || []).map(b => ({
+          title: b.title || '',
+          tags: Array.isArray(b.content) ? b.content : []
+        }));
+        j.data = { categories: cats, blocks: blocks };
+      }
 
       // images：/chapter 返回 images 数组，还需 /chapter_view_template 拿 scramble_id
       if (action === 'images' && j.data && Array.isArray(j.data.images)) {
@@ -952,6 +1242,20 @@ async function serveData(src, action, rule, target, query, req, res) {
             isVip: s.isVip || s.need_buy || false,
             addtime: s.addtime || ''
           }));
+        }
+
+        /* 单话作品兜底：CG 集/短篇的 /album 会返回 series: []、series_id: "0"，
+         * 但 total_photos > 0，且 photo_id 就等于 album_id（实测 141130：454 张图）。
+         * 不兜底的话前端会显示「0 话 / 无章节」。 */
+        if (!chapters.length && album.id && Number(album.total_photos) > 0) {
+          chapters = [{
+            id: String(album.id),
+            title: album.name || '本作品',
+            sortId: 1,
+            picCount: Number(album.total_photos),
+            isVip: false,
+            addtime: album.addtime || ''
+          }];
         }
         if (action === 'detail') {
           // 详情页：映射为前端认的 info 对象
@@ -1330,6 +1634,30 @@ module.exports = async function handler(req, res) {
     return res.status(204).end();
   }
 
+  /* --- 运维开关：调试端点默认关闭（会吐签名 token 与上游原始响应） --- */
+  if (pathname.indexOf('/api/debug/') === 0 && !DEBUG_ENABLED) {
+    setCors(res);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return res.status(404).json({
+      error: 'debug endpoints disabled',
+      hint: '设置环境变量 ENABLE_DEBUG_ENDPOINTS=1 后重新部署即可启用'
+    });
+  }
+
+  /* --- 运维开关：任务队列默认关闭（comic18 已改直连，不再需要 worker） --- */
+  if (
+    ['/task', '/claim', '/status', '/callback'].indexOf(pathname) >= 0 &&
+    !TASK_QUEUE_ENABLED
+  ) {
+    setCors(res);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return res.status(410).json({
+      error: 'task queue disabled',
+      hint: 'comic18 主链路已改为直连 API 域名，无需 worker；确需启用请设 ENABLE_TASK_QUEUE=1',
+      reason: '/callback 无鉴权，按 task_id 即可写入任意结果，长期开启等于把任务数据交给任何人'
+    });
+  }
+
   /* --- 临时 DEBUG：测试所有 18comic API 域名 --- */
   if (pathname === '/api/debug/comic18-chapters' && req.method === 'GET') {
     const id = sp.get('id') || '302569';
@@ -1363,17 +1691,10 @@ module.exports = async function handler(req, res) {
     }
     try {
       const u = new URL(imgUrl);
-      const allowedDomains = [
-        'cdn-msp.jmapiproxy1.cc',
-        'cdn-msp.jmapiproxy2.cc',
-        'cdn-msp2.jmapiproxy2.cc',
-        'cdn-msp3.jmapiproxy2.cc',
-        'cdn-msp.jmapinodeudzn.net',
-        'cdn-msp3.jmapinodeudzn.net',
-      ];
-      if (!allowedDomains.includes(u.hostname)) {
+      /* 白名单与 COMIC18_CDN_DOMAINS 共用一份，避免两处域名列表漂移 */
+      if (COMIC18_CDN_DOMAINS.indexOf(u.hostname) < 0) {
         setCors(res);
-        return res.status(403).json({ error: 'domain not allowed' });
+        return res.status(403).json({ error: 'domain not allowed', host: u.hostname });
       }
       const headers = {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
@@ -1384,7 +1705,16 @@ module.exports = async function handler(req, res) {
       const r = await fetchRaw(imgUrl, headers, 15000);
       setCors(res);
       res.setHeader('Content-Type', r.headers['content-type'] || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      if (r.status === 200 && r.body && r.body.length > 0) {
+        /* 图片字节由 URL 唯一确定（photo_id + 文件名），可放心长缓存：
+         *   浏览器 1 天 / 边缘节点 1 年，避免每张图都回源打到函数（成本与 30s 超时风险） */
+        res.setHeader(
+          'Cache-Control',
+          'public, max-age=86400, s-maxage=31536000, stale-while-revalidate=86400, immutable'
+        );
+      } else {
+        res.setHeader('Cache-Control', 'no-store');
+      }
       return res.status(r.status).send(r.body);
     } catch (e) {
       setCors(res);

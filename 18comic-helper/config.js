@@ -57,14 +57,16 @@ const CONFIG = {
       default: 60000,
     },
 
-    // CF 过盾：CloakBrowser (WSL Ubuntu) 自动获取 cf_clearance
-    // 前提：WSL + cloakbrowser + xvfb 已就绪
+    // CF 过盾：历史遗留配置，当前**不启用**
+    // 线上 comic18 走 api/proxy.js 直连 API 域名（不经过盾），不需要过盾。
+    // CloakBrowser 引擎（cf_engine.js）未提交，这里开启也不会生效。
+    // 真要做：必须在常驻 VPS 上，且 cf_clearance 需与 IP/UA/TLS 指纹一致。
     cf: {
-      enabled: true,
-      autoHandle: true,
+      enabled: false,
+      autoHandle: false,
       cookieCacheFile: '/tmp/cf_clearance_cache.json',
       cookieTTL: 30 * 60 * 1000, // 30 分钟
-      note: 'CloakBrowser (WSL) auto-solves CF challenge. Cookie cached for 30min.',
+      note: 'Legacy. CloakBrowser engine missing; production bypasses CF via API domains.',
     },
   },
 };

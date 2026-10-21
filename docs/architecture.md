@@ -1,15 +1,9 @@
 # 架构说明 (docs/architecture.md)
 
-> ⚠️ **本文档已合并至 `flowchart-complete.md`**，请使用统一版流程图文档。
-> 旧版 `architecture.md` 存在以下与代码不符之处（已在统一版中修正）：
-> - 架构图标注 Vercel Edge（实际运行时为 Node.js）
-> - 缺少 helper 进程通信流程（comic18 专用）
-> - 缺少多源请求链对比图（manwaxu / pixiv / comic18 差异）
-> - 风险清单 8 项（实际 11 项，已补充 helper SSRF、helper 会话假活、helper 过盾失败）
-> - 27 条契约（统一版扩充至 30 条，新增 SSRF 防护、`adapt.searchField`/`field` 分离、`homeSections` 驱动、`src` 不透传）
-> - 缺少 boot 真实顺序（`loadReaderPrefs → loadSourceList → loadRules → navigate`）
->
-> 统一版 `flowchart-complete.md` 已合并本文档与 `flowchart.md` 内容，以代码真实实现为准。
+> 本文档已按**代码真实状态**订正（2026-10）。
+> 早前版本曾称「本文档已合并至 `flowchart-complete.md`」——该文件并不存在，已删除该指引。
+> 另有三处历史描述已修正：运行时是 Node.js（非 Edge）、comic18 走 API 域名直连（非 helper 进程）、
+> 任务队列与调试端点默认关闭。
 
 ## 系统架构图
 
@@ -380,8 +374,9 @@ sequenceDiagram
 |------|------|------|------|------|
 | `/api/sources` | GET | — | JSON (源列表) | 可用书源列表（不含密钥/rules/UA） |
 | `/api/source/rules` | GET | `src`(可选) | JSON (书源规则) | 返回**单个源对象**（含 `rules`） |
-| `/api/home` | GET | page, pageSize, type, flag | JSON (漫画列表) | 首页/分类列表 |
-| `/api/search` | GET | keyword, page, pageSize | JSON (搜索结果) | 搜索漫画 |
+| `/api/home` | GET | page, o | JSON (漫画列表) | 首页/分类列表（comic18 仅 page/o 生效，见 AGENTS.md 实测表） |
+| `/api/search` | GET | keyword, page, o | JSON (搜索结果) | 搜索漫画；comic18 的分类/标签浏览也走这里（分类 id 过滤参数 `c` 被上游忽略） |
+| `/api/categories` | GET | — | JSON (分类树+标签块) | comic18：10 个大类（含子分类）+ 4 组 47 个标签；缓存 30 分钟 |
 | `/api/comic/{id}` | GET | — | JSON (漫画详情) | 漫画详情+封面+简介 |
 | `/api/comic/{id}/chapters` | GET | — | JSON (章节列表) | 章节列表（无章节源合成 1 话） |
 | `/api/comic/chapter/info/{cid}` | GET | — | JSON (章节信息) | 章节元信息 |
@@ -453,9 +448,11 @@ sequenceDiagram
 | CORS | 跨域请求被浏览器拦截 | 代理层统一设置 CORS 头 |
 | 部署未触发 | 仓库无 Vercel Git 集成，push 不会自动部署 | 手动 `vercel --prod`；或接入 Git 集成 |
 | 本地域名污染 | 本机 `*.vercel.app` 解析异常导致无法验证 | 用中转服务或修正 hosts |
-| helper 不可达 | helper 未启动 / 线上未配 `COMIC_HELPER` | 首页多栏目全部失败 → **502 + 失败明细**（不返回静默空列表）；部分失败 → 200 但带 `data._helper.ok=false` + `X-Helper-Partial: 1` |
-| helper 过盾失败 | 18comic Cloudflare 挑战变体 | helper 内部重试 + 超时兜底 |
-| helper 会话假活 | 进程在但页面不响应，fetch 卡死 | helper 内建看门狗（线程超时 + 闲置重建） |
+| API 域名失效 | 18comic 的 API 域名（`www.cdnhjk.net` 等）改版或下线 | 域名池 + 60s 失败冷却自动跳过；可用 `COMIC18_API_DOMAINS` 热切换 |
+| API 域名被上盾 | 18comic 给 API 域名也加 CF 盾，直连路线失效 | 扩域名池 → curl_cffi 指纹 → FlareSolverr → 真实浏览器；**必须在常驻 VPS 上做**（`cf_clearance` 绑 IP/UA/TLS） |
+| 签名/加密变更 | token 算法或 `data` 加密方式变更 | 签名与解密集中在 `comic18GenerateAuth` / `comic18Decrypt`，改一处即可 |
+| 任务队列端点滥用 | `/callback` 无鉴权，可按 task_id 写入任意结果 | 默认关闭（410），需 `ENABLE_TASK_QUEUE=1` 才启用 |
+| 调试端点信息泄露 | `/api/debug/*` 吐签名 token 与上游响应 | 默认关闭（404），需 `ENABLE_DEBUG_ENDPOINTS=1` 才启用 |
 
 ## 分层决策验证
 
@@ -497,10 +494,17 @@ vercel --prod
 
 ### 环境变量
 
-默认无需配置。唯一可选变量是 **`COMIC_HELPER`**：`comic18` 源的数据与图片都要经 helper 进程（过 Cloudflare + 切片还原），该变量指定 helper 地址，默认 `http://127.0.0.1:8765`。
+默认**全部无需配置**，站点开箱即用。以下均为可选项：
 
-- **本地（A 方案）**：helper 跑在本机，用默认值即可。
-- **线上（B 方案）**：Vercel 函数**访问不到**本机 `127.0.0.1`，必须在 Vercel 项目设置里把 `COMIC_HELPER` 指向一台墙外 VPS 上的 helper，否则线上 `comic18` 全部 502。`manwaxu` / `pixiv` 不受影响。
+| 变量 | 默认 | 作用 |
+|------|------|------|
+| `COMIC18_API_DOMAINS` | 内置 4 个域名 | 覆盖 18comic API 域名池（逗号分隔）。不设时域名池会每 30 分钟从官方 TOS 源自动更新；**设了即接管，不再自动更新** |
+| `ENABLE_TASK_QUEUE=1` | 关闭（返回 410） | 打开 `/task` `/claim` `/status` `/callback` 任务队列。**`/callback` 无鉴权**，仅在跑 VPS worker 时临时开启 |
+| `ENABLE_DEBUG_ENDPOINTS=1` | 关闭（返回 404） | 打开 `/api/debug/*`。会暴露签名 token 与上游原始响应，仅排障时开 |
+
+> `COMIC_HELPER` 已废弃：comic18 不再经 helper 进程取数。当前实现由 `api/proxy.js` 直连
+> `www.cdnhjk.net` 等 API 域名（不经 Cloudflare 盾），详见 `AGENTS.md` 的
+> 「18comic 与 Cloudflare」一节。
 
 ### 验证
 

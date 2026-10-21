@@ -14,7 +14,7 @@
 |-----|------|----------|------|
 | `manwaxu` | 漫蛙漫画（**默认源**） | manwaxu.cc | AES-256-CBC 加密，CDN 容灾链 `tu.mhttu.cc` → `mwtuwu.cc` → `tu.mwzu.cc` → `mwtusi.cc` |
 | `pixiv` | pixiv | www.pixiv.net | 明文图，固定 host `i.pximg.net`（靠 Referer 防盗链），免登录 |
-| `comic18` | 18comic | 18comic.vip | Cloudflare 盾 + 图片纵向切片还原；数据和图片都走 helper 进程（本地 A 方案 / VPS B 方案） |
+| `comic18` | 18comic | 主站 18comic.vip（**被 CF 盾保护，代码从不请求**）；实际数据走 API 域名 `www.cdnhjk.net` 等，图片走 `cdn-msp*.cc` | token 签名 + AES-256-ECB 解密；图片经 `/api/image` 转发后由前端 canvas 纵向切片还原 |
 
 访问时用 `?src=<key>` 选源；**不带 `src` 一律走默认源 manwaxu**。
 
@@ -44,15 +44,110 @@
 ```
 my-mirror/
 ├── api/
-│   └── proxy.js          # 后端：书源规则表 + 路由 + 数据转发 + 图片 CDN 容灾 + AES 解密
-├── manga_reader.html     # 前端：SPA 阅读器 + 书源规则配置 + API 客户端
+│   ├── proxy.js          # 后端：书源规则表 + 路由 + 数据转发 + comic18 签名/解密 + 图片 CDN
+│   └── test-album-fields.js
+├── manga_reader.html     # 前端：SPA 阅读器 + 书源规则配置 + API 客户端 + canvas 切片还原
+├── dev-server.js         # 本地开发服务器：把 vercel.json 的 rewrites 在本地复现，不依赖 vercel CLI
 ├── vercel.json           # Vercel 配置：路由门卫，所有请求转给 proxy.js
+├── 18comic-helper/       # 【历史遗留，不在主链路】上一代 worker / CloakBrowser 方案，见下节
 ├── AGENTS.md             # 本文件：项目 AI 上下文
+├── 使用说明.md            # 面向使用者的说明文档
 ├── docs/
 │   └── architecture.md   # 架构说明 + 数据流 + 契约
-├── README.md             # 面向使用者的说明文档
-└── .gitignore            # Git 忽略规则
+├── package.json
+└── README.md
 ```
+
+## 18comic 与 Cloudflare（重要，别改错方向）
+
+**当前架构是「绕盾」，不是「过盾」。** 代码从不请求被 Cloudflare 保护的主站入口。
+
+2026-10 实测（经本机代理）：
+
+| 目标 | 结果 |
+|------|------|
+| `18comic.vip` | 403 `Just a moment...`，响应头 `Cf-Mitigated: challenge`，`cType:'managed'` |
+| `www.cdnhjk.net` / `www.cdngwc.net` | 200，`{"code":200,"data":"<AES密文>"}`，无盾 |
+| `www.cdngwc.cc` | 连接失败，域名池里这个是坏的 |
+| `cdn-msp.jmapiproxy1.cc` / `2.cc` | 200 `image/jpeg`，无盾，但**无 ACAO 头** |
+
+因此：
+
+- 数据走 `COMIC18_API_DOMAINS`（`www.cdnhjk.net` 等），带 `token` / `tokenparam` 签名头，`data` 用 **aes-256-ecb** 解密（key = `md5(ts + APP_DATA_SECRET)` 的 UTF-8 字节，无 IV）。早期注释误写为 CBC + 前 16 字节 IV，与实现不符。
+- 图片 CDN 无 `Access-Control-Allow-Origin`，浏览器直连会让 canvas 被污染无法读像素，所以必须经 `/api/image?url=` 由函数转发，前端再按 `blockNum` 做纵向切片还原。
+- **`blockNum = 0` 是正常的，不是 bug**：`comic18GetNum()` 第一条就是 `if (aid < scrambleId) return 0`，即相册 id 小于该作品的 `scramble_id` 时上游根本没切片（老相册）。实测 141130：`scrambleId = 220980`、454 张图 `blockNum` 全 0，阅读器里 `canvas` 数为 0 而图片正常显示；1114751 的 aid 已过阈值，才会出现 canvas。**验证反混淆是否工作，要挑 aid > scrambleId 的作品**，否则会误判成「反混淆失效」。
+- **域名池会自动跟随官方更新**：`comic18RefreshDomainPool()` 每 30 分钟（进程内 TTL）拉取官方 3 个 TOS 地址里的加密域名表，解密后合并进池子。算法与 `jmcomic` 一致：
+  `base64 → key = md5('' + 'diosfjckwpqpdfjkvnqQjsik') 的 UTF-8 字节 → aes-256-ecb → 去 PKCS 填充 → JSON`。
+  解密结果要**同时取 `Server` 和 `jm3_Server` 两个字段**——`jm3_Server`（形如 `[["www.cdnutc.me","線路5"], ...]`）里有 `Server` 没有的域名，只取 `Server` 会漏掉实测最快的 `www.cdnutc.me`。
+  刷新是**后台异步**的（`comic18MaybeRefreshDomains`），不阻塞当前请求，下次请求生效；失败静默保留旧列表。
+- **判断 API 域名是否可用，必须打 API 路径，不能看根路径**（这是最容易误判的一点）：
+
+  | 域名 | 根路径 | API（带签名） |
+  |------|--------|--------------|
+  | `www.cdnutc.me` | 200 + 响应体 `64` | **200，约 0.5s（最快）** |
+  | `www.cdnhjk.net` | 403 + CF 挑战页 | 200，约 0.7s |
+  | `www.cdnutc.cc` | 403 + CF 挑战页 | 超时（不可用） |
+
+  根路径返回 `64` 是节点标识/健康响应，返回 403 是 CF 拦网页请求，**两者都不代表域名坏了**。这些域名是 API 服务器，本来就不提供网页。
+- **不要用 curl 判断这些域名**：同一域名 curl 会得到 `000`（TLS 握手被重置），而 Node `https` 能正常拿到 200。本项目的 `fetchRaw` 用的是 Node `https`，与线上环境一致，判断可用性要用 Node 或浏览器。
+- 进程内有失败冷却（60s）：403/5xx 的域名会被暂时跳过，404 等业务错误不冷却。
+- 运维可用 `COMIC18_API_DOMAINS=a.com,b.com` 覆盖，**覆盖后不再自动更新**（运维接管优先）。
+- 网页端镜像站（`18comic.ink`、`jmcomic-zzz.one`、`comic18j-guta.*` 等，来自官方发布页）**全部有 CF 盾**，实测 `403 + cf-mitigated: challenge`，不可用于取数。能用的是 API 域名与图片 CDN。
+
+**如果哪天 API 域名也被上盾，按成本从低到高：**
+
+1. 扩 `COMIC18_API_DOMAINS`（先做这个，最便宜）
+2. `curl_cffi` / `curl-cffi-node` 指纹模拟（Managed Challenge 常按 TLS/JA3 + HTTP2 指纹判定，不只按 IP）
+3. FlareSolverr / Byparr 换取 `cf_clearance`
+4. 真实浏览器自动化（Patchright / Camoufox / CloakBrowser）
+
+**硬约束（违反必白做）：** `cf_clearance` 与 **IP + UA + TLS 指纹**三者绑定，取 cookie 的机器必须就是用 cookie 的机器。Vercel 函数出站 IP 共享且漂移，**过盾逻辑放在 Serverless 里必然失败**，只能落在常驻 VPS。`18comic-helper/` 里的 `ubuntu_worker.py`（claim/callback 队列）就是为这个准备的骨架。
+
+### 18comic 分类 / 排序 / 标签（全部实测，勿照抄 jmcomic 库）
+
+数据源是 `/categories`（一次给全）和 `/categories/filter`、`/search`。**这个 App API（`tokenparam=ts,2.1.7`）与 jmcomic Python 库的假设不一致**，照抄会踩坑：
+
+| 参数 | 上游是否生效 | 实测证据 |
+|------|-------------|---------|
+| `page` | ✅ 生效 | page=1/2/3 首条 id 全不同 |
+| `o`（排序） | ✅ 仅 4 个值有效 | `mr`/`mv`/`mp`/`tf` 各自返回不同排序 |
+| `o` 非法值 | ⚠️ **不报错，返回垃圾数据** | `o=tr`/`o=md`/`o=bad` 返回 `65536`、`262144`、`1441792` 这类移位 id（真实 id 不会是 2 的幂）。已用 `paramWhitelist` 拦截并回落默认值 |
+| `page_size` / `pageSize` | ❌ 被忽略 | 每页固定 80 条 |
+| `c`（分类 id） | ❌ **被完全忽略** | 4 个域名实测 `c=0..9` 返回**完全相同**的 id 列表 |
+| `t`（时间过滤） | ❌ 被忽略 | `t=a/t/w/m` 结果与不带 t 完全一致 |
+| `search_query`（`/search`） | ✅ 生效 | `同人`→4989、`韩漫`→1908、`纯爱`→10000 |
+| `main_tag` | 建议带 `0` | 缺省未验证，规则里给默认值 |
+
+**`/categories` 真实结构**（`action=categories` 归一化后）：
+
+- 10 个大类：`0 最新A漫`（= 全部）、`1 同人`(354978)、`2 单本`(43363)、`3 短篇`(119032)、`4 其他类`(52905)、`5 韩漫`(130124)、`6 English Manga`(397296)、`7 Cosplay`、`8 3D`、`9 禁漫汉化组`
+- 大类带 `type` 字段，这是**「怎么查」的关键**：`slug`（1–6）走分类过滤，`search`（7–9）官方自己也是拿 slug 去搜索
+- `sub_categories` 用 `CID`（不是 `id`）作为字段名，1–25 号子分类
+- `blocks` 是 4 组共 47 个标签：主题A漫 14 / 角色扮演 15 / 特殊PLAY 13 / 其他 5
+
+**因为 `c` 无效，「按分类浏览」只能退化为「按分类名搜索」**，命中率要如实看待：
+
+| 分类名 | 搜索 total | 前 30 条里真属于该分类的 |
+|--------|-----------|------------------------|
+| 韩漫 | 1908 | **30 / 30** |
+| 同人 | 4989 | 27 / 30 |
+| 3D | 10000 | 29 / 30（3D 属「其他类」子分类） |
+| Cosplay | 7166 | 23 / 30 |
+| 短篇 | 663 | **1 / 30**（命名不准，几乎不可用） |
+| 单本 | 3 | 1 / 3（基本搜不到） |
+
+所以前端分类页必须挂一句「按关键词匹配，可能与官方分类页有偏差」的提示，**不能假装是精确分类**。想真正精确，只能上网页端（有盾）或等上游恢复 `c` 参数。
+
+**运维开关（默认全关，Vercel 环境变量控制）：**
+
+| 变量 | 默认 | 作用 |
+|------|------|------|
+| `ENABLE_TASK_QUEUE=1` | 关 | 打开 `/task` `/claim` `/status` `/callback`；关闭时返回 410。`/callback` 无鉴权，长期开启等于把任务数据交给任何人 |
+| `ENABLE_DEBUG_ENDPOINTS=1` | 关 | 打开 `/api/debug/*`；关闭时 404。开启会暴露签名 token 与上游原始响应 |
+| `UPSTREAM_CACHE_TTL_MS=0` | 20000 | 上游 JSON 短缓存 TTL。设 0 彻底关闭（排查「数据不更新」时的第一开关） |
+| `COMIC18_API_DOMAINS` | 内置 4 个 | 覆盖 18comic API 域名池（逗号分隔）。**覆盖后不再自动跟随官方更新** |
+| `DEV_RELOAD_HTML=1` | 关 | 关闭 `readFrontend()` 的 HTML 内存缓存，改完 `manga_reader.html` 刷新即生效。`dev-server.js` 会自动置 1；**生产不要开**（白读 fs） |
+
 
 ## vercel.json 配置说明
 
@@ -93,14 +188,17 @@ my-mirror/
 | `decryptImage(src, buf)` | 先嗅探魔数，已是明文则原样返回；否则按**该源**的 AES 参数解密 |
 | `upstreamHeaders(src, req)` | 统一上游请求头（Referer / Origin / UA / Accept）——pixiv 防盗链靠它 |
 | `setCors()` | 设置 CORS 头 |
-| `readFrontend()` | 读取并缓存 `manga_reader.html`（多路径兜底） |
+| `readFrontend()` | 读取并缓存 `manga_reader.html`（多路径兜底）；`DEV_RELOAD_HTML=1` 时每次重读，本地改完刷新即生效 |
 | `getByPath()` / `fillPath()` / `extractVars()` | 嵌套取值、路径占位符填充、路径变量抽取 |
-| `buildUpstreamQuery()` | 上游 query 构造：白名单 + `paramMap` 改名 + `paramDefaults` 默认值 |
+| `buildUpstreamQuery()` | 上游 query 构造：白名单 + `paramMap` 改名 + `paramDefaults` 默认值 + `paramWhitelist` 取值校验（上游对非法值不报错而是返回垃圾数据） |
 | `mapItem()` / `normalizeList()` / `normalizeDetail()` / `normalizeImages()` | 按 `adapt` 声明把上游 JSON 归一化成前端认的结构 |
+| `withUpstreamCache()` | 上游 JSON 短缓存（默认 20s TTL + 并发合流）。**只缓存上游原始字符串**，每次请求再 parse 新对象——`serveData` 会就地改写 `j.data`，缓存对象会串味 |
 | `serveFrontend()` | 返回前端界面；读不到则返回带排查提示的 500 |
 | `serveRules(src, res)` | `/api/source/rules`，返回**单个源对象**（含 `rules`），`max-age=300` |
 | `serveSources(res)` | `/api/sources`，源列表（不含密钥/rules/UA） |
 | `serveData()` | 按规则转发；支持 `multi`（多请求组装）、`__fake_chapters__`（合成单话）、`adapt` 归一化 |
+| ↳ 单话作品兜底 | `/album` 返回 `series: []` 但 `total_photos > 0` 时，合成 1 话（`id = album.id`、`picCount = total_photos`）。**否则前端「0 话 / 无章节」**——CG 集/短篇的图全挂在 album 自己的 id 上，`photo_id === album_id` |
+| ↳ 分类树归一化 | `action === 'categories'` 时把 `/categories` 的 `sub_categories[].CID`、`total_albums`、`type` 改成前端统一的小写字段；缓存 30 分钟 |
 | `serveImage(src, target)` | 按源 `imageRule.host`（固定）或 `imageCdn`（容灾链）取图 + 可选解密 |
 | `handler()` | 入口：路由分发 |
 
@@ -144,9 +242,15 @@ my-mirror/
 3. **API 客户端**：`buildUrl()` / `apiGet()` 构建请求 URL（**自动追加 `&src=`**）；`toProxyPath(u, orig)` 把图片绝对地址转成代理路径（**同样追加 `&src=`**，是防多源串图的唯一注入点）
 4. **视图渲染**：
    - 首页（`renderHome`）：栏目由源的 **`homeSections`** 驱动（manwaxu 六栏 / pixiv 日周月三榜）；**非本源栏目会清空并隐藏**，否则残留上一个源的卡片
-   - 分类（`renderCategory` / `loadCategory`）：按类型筛选 + 分页加载
+   - 分类（`renderCategory` / `loadCategory` / `loadCatTree` / `setCat` / `setCatKeyword` / `setCatSort`）：**分类表不硬编码**
+     - comic18：拉 `/api/categories` → 10 个大类 + 4 组 47 个标签 + 4 个排序按钮；选分类/标签后走 `/api/search?keyword=<分类名或标签名>&o=<排序>`；`全部`（id `0`）直接走 `/api/home`
+     - 其它源：沿用栏目式 `CAT_TABS`（`type` + 前端 `filterByDimension` 过滤）
+     - `catTree` / `categoryId` / `catKeyword` / `catSort` 都是**源相关状态**，`switchSource()` 里必须重置，并纳入视图快照
+     - 早期硬编码的 12 项分类里 id 7 之后全是编的（见上文「分类 / 排序 / 标签」实测表），改动时不要再写死
    - 搜索（`renderSearch`）：关键词搜索 + 防抖
-   - 详情（`openDetail`）：漫画信息 + 章节列表
+     - **`facetClick`（详情页标签/作者 → 搜索）必须先把关键词写进 `viewSnapshots.search` 再 `navigate('search')`**；`navigate` 会用快照覆盖输入框，先填输入框的做法会被清空
+     - `navigate` 恢复搜索页时**先回填 `#searchInput` 再 `renderSearch()`**：`renderSearch` 读的是输入框的值，顺序反了会用旧关键词取数（表现为点标签进去是空关键词）
+   - 详情（`openDetail`）：漫画信息 + 章节列表。**这两次请求在 comic18 上打的是同一个上游地址**（`detail` 与 `chapters` 都映射 `/album?id=`），由代理端 `withUpstreamCache` 的 20s 短缓存吃掉第二次（实测 0.67s → 0.005s）。注意 `openDetail` 是先清空 `state.chapters` 再取数，避免取数失败时残留上一部作品的章节
    - 阅读器（`openChapter` / `setupLazy`）：图片懒加载 + 阅读进度条
    - **连续阅读**（`toggleContinuous` / `preloadNextChapter` / `setupContinuousLoader`）：滚到底自动把下一话图片追加到页面底部，不翻页
    - **显示设置**（`setImgWidth` / `setImgWidthPct` / `setBrightness` / `loadReaderPrefs`）：宽度滑杆（30–100%）+ 预设（fit/orig）+ 亮度 30–130%，存 `localStorage.manga_prefs`
@@ -157,7 +261,10 @@ my-mirror/
    - **返回详情页**（`backToDetail`）：底部栏「← 详情」与 `Esc` 均可返回（对应 Pixiv ③）
    - **章节快速跳转**（`openJumpPanel` / `jumpToChapter`）：阅读器内浮层列全部话，当前话高亮，Esc 关闭
    - **话内位置记忆**（`savePos` / `loadPos` / `restorePos`）：存话内偏移到 `localStorage.manga_pos`（**带 `src` 字段**，见下）
-   - **单话源 UI**（`isSingleChapterSource` / `applySingleChapterUI`）：`adapt.fakeChapters && 章节数<=1` 时上下话入口置灰 + 提示「本作品仅 1 话」
+   - **单话源 UI**（`isSingleChapterSource` / `applySingleChapterUI`）：**只看 `state.chapters.length <= 1`**，为真时 `#btnPrev` / `#btnNext` 置 `disabled` + 提示「本作品仅 1 话」
+     - 早期条件是 `adapt.fakeChapters && 章节数<=1`，但 comic18 存在「`series: []`、`series_id: "0"`、`photo_id === album_id`」的 CG 集/短篇（如 141130，454 张图挂在 album 自己的 id 上），代理端已合成 1 话，前端若仍按 `fakeChapters` 判定就不会置灰，点下一话越界
+     - **置灰依赖 HTML 上的 id**：`applySingleChapterUI()` 用 `getElementById('btnPrev'/'btnNext')`，而工具栏那两个 `<button>` 长期没写 id，导致 `b` 恒为 `null`、置灰从未生效（表现为点了没反应）。改这两个按钮时**必须保留 id**
+     - 视觉反馈靠 CSS `.controls button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(1)}`；只设 `disabled` 没有样式等于用户看不出差别
 5. **阅读历史**：`localStorage` 存储最近 20 本阅读记录（**带 `src` 字段**，见下）
 6. **书源规则面板**：`renderRulesPanel()` 展示当前生效的规则（调试用；对无 `imageCdn`/`decrypt.enabled=false` 的源有防御）
 7. **启动流程**：`boot()` → `loadReaderPrefs()` → `loadSourceList()` → `loadRules()` → `navigate('home')`
@@ -377,7 +484,12 @@ Pixiv 官方原文（pixiv.help）：
 
 ## 验证命令
 
-- **本地开发**：`vercel dev`（启动 Vercel 本地开发服务器）
+- **本地开发（推荐）**：`node dev-server.js`（默认 3000，可用 `PORT=3999 node dev-server.js`）
+  - 原生 http server 包一层 `api/proxy.js` 的 handler，复现 `vercel.json` 的 `/(.*) → /api/proxy` 重写
+  - 打开 `http://127.0.0.1:3000/` 即站点首页；每个请求会打印状态码与耗时
+  - **默认源是 `manwaxu`**，本机若连不上它会看到 `502`，左上角下拉切到 `18comic` 即可
+  - 不需要 `vercel login`，不需要装 Vercel CLI
+- **本地开发（备选）**：`vercel dev`（需要 Vercel CLI 与登录态）
 - **部署**：`vercel`（预览部署）或 `vercel --prod`（生产部署）
 - **检查函数**：`vercel functions`（列出所有函数）
 - **查看日志**：`vercel logs`（查看函数执行日志）
@@ -475,6 +587,7 @@ Pixiv 官方原文（pixiv.help）：
     desc, match,         // 图片路径正则（按源独立）
     cdn: boolean,        // true → 走 imageCdn 容灾链
     host?: string,       // 或固定单 host（如 https://i.pximg.net）
+    direct?: boolean,    // true → 前端改走 /api/image?url=（comic18：CDN 无 ACAO，必须代理）
     decrypt: boolean
   },
   adapt: {               // 可选：字段归一化声明（上游结构≠前端结构时必填）
@@ -493,4 +606,4 @@ Pixiv 官方原文（pixiv.help）：
 
 | key | 名称 | 特点 |
 |-----|------|------|
-| `comic18` | 18comic | Cloudflare 盾 + 图片纵向切片还原；数据和图片都走 helper 进程（本地 A 方案 / VPS B 方案） |
+| `comic18` | 18comic | 主站被 CF 盾保护（代码不请求）；数据走 API 域名、图片走 CDN，均无盾 |

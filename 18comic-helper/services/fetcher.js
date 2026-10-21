@@ -1,15 +1,18 @@
 'use strict';
 
 /**
- * 请求封装层（CloakBrowser CF 过盾版）
+ * 请求封装层 —— 【历史遗留，不在 comic18 主链路】
  *
- * 流程：
- *   1. 先检查 cf_clearance cookie 缓存
- *   2. 有缓存 → 带 cookie 直接请求
- *   3. 无缓存/过期 → CloakBrowser 过盾拿 cookie
- *   4. 请求时检测 CF 挑战 → 自动清除缓存并重新过盾
+ * 现状（2026-10）：comic18 的数据与图片已由 api/proxy.js 直连 18comic API 域名
+ * （www.cdnhjk.net 等，不经过 Cloudflare 盾），本文件与 18comic-helper/ 整个目录
+ * 都不是线上请求路径的一部分，仅作为「万一 API 域名也被上盾」时的备用参考。
  *
- * 前提：WSL Ubuntu + cloakbrowser + xvfb + 字体
+ * 注意：原先这里 require 的 ./cf_engine.js 已不存在（CloakBrowser 过盾引擎未提交），
+ * 该引用已移除；因此本文件现在只是「带代理的普通 GET」，不含任何过盾能力。
+ *
+ * 若将来真要恢复过盾，先读 AGENTS.md「过 CF 挑战」一节的三要素约束：
+ * cf_clearance 与 IP / UA / TLS 指纹绑定，取 cookie 的机器必须就是用 cookie 的机器，
+ * 放在 Vercel Serverless（出站 IP 共享且漂移）里必然失败，必须落在常驻 VPS。
  */
 
 const http = require('http');
@@ -22,7 +25,6 @@ const CONFIG = require('../config.js');
 const { getComic18 } = require('../config.js');
 const { getConfig } = require('../config.js');
 const { getProxyUrl } = require('../config.js');
-const cfEngine = require('./cf_engine.js');
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +

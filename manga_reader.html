@@ -49,6 +49,9 @@ body.in-reader #readerTools,body.in-reader #rulesPanel{position:fixed;left:0;rig
 .controls{display:flex;flex-wrap:nowrap;flex:0 0 auto;align-items:center;gap:4px}
 .controls button{background:transparent;border:1px solid var(--ln);color:var(--mut);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;flex:0 0 auto;line-height:1.2}
 .controls button .ic{margin-right:3px}
+/* 置灰态：单话作品（仅 1 话）时上一话/下一话不可用，必须有可见反馈，
+   否则用户点了没反应会以为是卡死 */
+.controls button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(1)}
 /* 窄屏渐进降级（由 fitReaderTop() 依据真实换行情况加类，不用 media query：
    media query 只认视口宽度，无法应对"顶栏可用宽度"变化） */
 .reader-top.compact .controls button .lb{display:none}
@@ -82,6 +85,27 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 .filter-bar button.active,.filter-bar button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
 #loadMore{display:block;width:100%;margin-top:16px;padding:12px;background:transparent;border:1px dashed var(--ln);color:var(--mut);border-radius:8px;cursor:pointer;font-size:13px}
 #loadMore:hover{border-color:var(--accent);color:var(--accent)}
+/* 分类页：分类行 + 排序行 + 标签块 */
+/* .filter-bar 是 flex 容器，直接塞 details / 提示 div 会被当成同一行的
+   flex item 挤在一排（实测「标签（47）」和提示文字叠在同一行），
+   这里强制这三类子块各占满一行。 */
+.filter-bar > .cat-row,
+.filter-bar > .tag-blocks,
+.filter-bar > .cat-hint{flex:0 0 100%}
+.cat-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.cat-row .cat-cap{font-size:12px;color:var(--mut);margin-right:2px}
+.cat-sub{display:flex;gap:6px;flex-wrap:wrap;margin:-6px 0 12px}
+.cat-sub button{padding:2px 9px;font-size:11px;border:1px dashed var(--ln);background:transparent;color:var(--mut);border-radius:12px;cursor:pointer}
+.cat-sub button:hover{border-color:var(--accent);color:var(--accent)}
+.tag-blocks{margin:0 0 16px;font-size:12px}
+.tag-blocks summary{cursor:pointer;color:var(--mut);padding:4px 0;user-select:none}
+.tag-blocks summary:hover{color:var(--accent)}
+.tag-blocks .blk{margin:6px 0 10px}
+.tag-blocks .blk-t{color:var(--mut);font-size:11px;margin-bottom:5px}
+.tag-blocks .chips{display:flex;gap:6px;flex-wrap:wrap}
+.tag-blocks .chips button{padding:3px 10px;font-size:11px;border:1px solid var(--ln);background:var(--card);color:var(--fg);border-radius:12px;cursor:pointer}
+.tag-blocks .chips button:hover,.tag-blocks .chips button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.cat-hint{font-size:11px;color:var(--mut);margin:0 0 10px;line-height:1.6}
 /* 连续阅读模式 */
 .chap-sep{display:flex;align-items:center;gap:12px;margin:32px 0 16px;color:var(--mut);font-size:13px}
 .chap-sep::before,.chap-sep::after{content:'';flex:1;height:1px;background:var(--ln)}
@@ -210,8 +234,8 @@ body.zoomed{overflow:hidden}
       <div class="progress"><i id="progressBar"></i></div>
       <div class="controls">
         <button onclick="openJumpPanel()"><span class="ic">📖</span><span class="lb">章节</span></button>
-        <button onclick="prevChapter()"><span class="ic">⏮</span><span class="lb">上一话</span></button>
-        <button onclick="nextChapter()"><span class="ic">⏭</span><span class="lb">下一话</span></button>
+        <button onclick="prevChapter()" id="btnPrev"><span class="ic">⏮</span><span class="lb">上一话</span></button>
+        <button onclick="nextChapter()" id="btnNext"><span class="ic">⏭</span><span class="lb">下一话</span></button>
         <button onclick="toggleReaderTools()"><span class="ic">🎨</span><span class="lb">设置</span></button>
         <button onclick="toggleAutoScroll()" id="btnAutoScroll"><span class="ic">▶</span><span class="lb">自动滚动</span></button>
         <button onclick="toggleRules()"><span class="ic">🔧</span><span class="lb">书源规则</span></button>
@@ -354,6 +378,9 @@ async function switchSource(key){
   state.comic = null; state.chapters = []; state.homeList = [];
   state.viewChapIdx = 0; state.viewPos = 0; state.chapIdx = 0;
   state.continuous = false; state.loadedChaps = {}; state.chapRanges = [];
+  // 分类树与分类选择也是源相关的（comic18 的分类 id 对别的源毫无意义）
+  state.catTree = null; state.categoryId = '0'; state.catKeyword = ''; state.catSort = 'mv';
+  state.homePage = 1;
   stopAutoScroll();
   AUTOSCROLL.anchorPos = null;
   renderSourceSelect();
@@ -369,6 +396,7 @@ async function loadRules(){
     if(!r.ok) throw new Error('rules http '+r.status);
     const j = await r.json();
     if(j && j.rules){ BOOK_SOURCES = j; }
+    state.rules = BOOK_SOURCES;   // 保持同步：有些渲染函数读 state.rules
     document.getElementById('srcBadge').textContent = '书源: ' + BOOK_SOURCES.name + ' v' + BOOK_SOURCES.version + ' (proxy)';
   }catch(e){
     document.getElementById('srcBadge').textContent = '书源: ' + BOOK_SOURCES.name + ' v' + BOOK_SOURCES.version + ' (内联)';
@@ -475,8 +503,11 @@ const state = {
   comic:null,        // 详情
   chapters:[],       // 章节列表
   chapIdx:0,
-  homeType:0,        // 分类页栏目 type
-  categoryId:0,      // comic18 分类 id（0=全部）
+  homeType:0,        // 分类页栏目 type（非 comic18 源用）
+  categoryId:'0',    // comic18 当前分类 id（'0'=全部）
+  catKeyword:'',     // comic18 当前分类对应的搜索词（分类名/标签名）
+  catSort:'mv',      // comic18 分类页排序（mr/mv/mp/tf）
+  catTree:null,      // comic18 分类树 {categories, blocks}，由 /api/categories 下发
   searchSort:'mr',   // comic18 搜索排序
   searchKeyword:'', // 搜索关键词（快照恢复用）
   homePage:1,
@@ -496,7 +527,7 @@ const state = {
   autoDwell:3000,    // 逐张翻模式下每张停留毫秒（500–10000）
   showToast:true,    // 是否显示「第 N 张」等轻提示
   viewSnapshots:{    // 视图状态快照：离开时保存，返回时恢复
-    category:{ categoryId:0, homeType:0, homePage:1, scrollY:0 },
+    category:{ categoryId:'0', catKeyword:'', catSort:'mv', homeType:0, homePage:1, scrollY:0 },
     home:{ homeType:0, homePage:1, scrollY:0 },
     search:{ keyword:'', scrollY:0 }
   },
@@ -510,7 +541,8 @@ const state = {
 /** 捕获当前视图的参数（用于栈帧恢复） */
 function captureParams(view){
   if(view === 'category'){
-    return { categoryId: state.categoryId, homeType: state.homeType, homePage: state.homePage };
+    return { categoryId: state.categoryId, catKeyword: state.catKeyword, catSort: state.catSort,
+             homeType: state.homeType, homePage: state.homePage };
   }
   if(view === 'home'){
     return { homeType: state.homeType, homePage: state.homePage };
@@ -538,6 +570,8 @@ function navigate(view, opts = {}){
   if(prev === 'category'){
     state.viewSnapshots.category = {
       categoryId: state.categoryId,
+      catKeyword: state.catKeyword,
+      catSort: state.catSort,
       homeType: state.homeType,
       homePage: state.homePage,
       scrollY: scrollTop
@@ -629,10 +663,12 @@ function navigate(view, opts = {}){
     }
   }
   if(view==='category'){
-    // 恢复分类页状态快照（分类、栏目、分页、滚动位置）
+    // 恢复分类页状态快照（分类、标签、排序、分页、滚动位置）
     const snap = state.viewSnapshots.category;
     if(snap){
       state.categoryId = snap.categoryId;
+      state.catKeyword = snap.catKeyword || '';
+      state.catSort = snap.catSort || 'mv';
       state.homeType = snap.homeType;
       state.homePage = snap.homePage;
       renderCategory();
@@ -646,9 +682,12 @@ function navigate(view, opts = {}){
     const snap = state.viewSnapshots.search;
     if(snap){
       state.searchKeyword = snap.keyword;
-      renderSearch();
+      /* 必须先回填输入框再 renderSearch()：renderSearch() 读的是
+       * #searchInput.value，顺序反了就会用旧关键词取数（表现为点了标签
+       * 跳进搜索页却是空关键词、返回一堆无关结果）。 */
       const input = document.getElementById('searchInput');
       if(input) input.value = snap.keyword;
+      renderSearch();
       requestAnimationFrame(()=>window.scrollTo(0, snap.scrollY));
     } else {
       renderSearch();
@@ -670,6 +709,8 @@ function goBack(){
   // 恢复视图参数
   if(view === 'category' && params.categoryId !== undefined){
     state.categoryId = params.categoryId;
+    state.catKeyword = params.catKeyword || '';
+    state.catSort = params.catSort || 'mv';
     state.homeType = params.homeType || 0;
     state.homePage = params.homePage || 1;
   } else if(view === 'home' && params.homeType !== undefined){
@@ -745,30 +786,27 @@ function errBlock(msg, opts){
 }
 
 /* ============================================================
- * 六、分类 —— 复用 home 规则的 type + page
+ * 六、分类
+ * ------------------------------------------------------------
+ * comic18：分类表**不硬编码**，由 /api/categories 下发（10 个大类 + 子分类
+ *          + 4 组共 47 个标签）。早期这里写死了 12 项「同人/单本/短篇/其他/
+ *          韩漫/美漫/古风/玄幻/校园/悬疑/恐怖/搞笑」，实测只有前 6 项对得上，
+ *          第 7 项起全是编的（真实 7=Cosplay、8=3D、9=禁漫汉化组）。
+ *
+ *          关键限制（实测，别踩）：该 App API 的 /categories/filter 只认
+ *          page 和 o，**c（分类 id）与 t（时间）被完全忽略** —— 4 个域名
+ *          实测 c=0..8 返回完全相同的 id 列表。所以「按分类浏览」只能退化为
+ *          「按分类名搜索」，命中率对大类是够的（韩漫 30/30、同人 27/30），
+ *          对「单本/短篇」这种命名不准的会明显偏低（短篇前 30 条只有 1 条真属于短篇）。
+ *          这一点必须如实提示用户，不能假装是精确分类。
  * ============================================================ */
 const CAT_TABS = [
   {label:'全部', type:0}, {label:'热门', type:1}, {label:'VIP', type:2},
   {label:'古风', type:3}, {label:'玄幻', type:4}, {label:'校园', type:5}
 ];
 
-/* 18comic 分类 id 映射（从 /categories/filter 返回的 category.id 提取） */
-const COMIC18_CATEGORIES = [
-  { id: 1, label: '同人' },
-  { id: 2, label: '单本' },
-  { id: 3, label: '短篇' },
-  { id: 4, label: '其他' },
-  { id: 5, label: '韩漫' },
-  { id: 6, label: '美漫' },
-  { id: 7, label: '古风' },
-  { id: 8, label: '玄幻' },
-  { id: 9, label: '校园' },
-  { id: 10, label: '悬疑' },
-  { id: 11, label: '恐怖' },
-  { id: 12, label: '搞笑' }
-];
-
-/* 18comic 搜索排序选项 */
+/* comic18 排序：实测只有这 4 个值上游认；o=tr / o=md / 随便写 会返回
+ * 65536、262144、1441792 这类移位 id（代理端 paramWhitelist 会拦掉）。 */
 const COMIC18_SORT_OPTIONS = [
   { o: 'mr', label: '最新' },
   { o: 'mv', label: '最多浏览' },
@@ -776,27 +814,106 @@ const COMIC18_SORT_OPTIONS = [
   { o: 'tf', label: '最多收藏' }
 ];
 
-function renderCategory(){
-  const tabs = (SRC_KEY==='comic18') ? COMIC18_CATEGORIES : CAT_TABS;
-  document.getElementById('catFilters').innerHTML = tabs.map(t=>{
-    const id = (SRC_KEY==='comic18') ? t.id : t.type;
-    const active = (SRC_KEY==='comic18') ? (state.categoryId===id) : (state.homeType===t.type);
-    return `<button class="${active?'active':''}" onclick="setCat(${id})">${t.label}</button>`;
-  }).join('');
-  // 分类页返回时保留已有分页状态；重新选择分类时再显式重置。
+/** 拉分类树（每个源只拉一次，切源时置空重拉） */
+async function loadCatTree(force){
+  if(SRC_KEY !== 'comic18') return null;
+  if(state.catTree && !force) return state.catTree;
+  try{
+    const d = await apiGet(frontPathOf('categories','/api/categories'));
+    state.catTree = (d && Array.isArray(d.categories))
+      ? d
+      : { categories: [], blocks: [], error: '分类接口返回异常' };
+  }catch(e){
+    state.catTree = { categories: [], blocks: [], error: e.message };
+  }
+  return state.catTree;
+}
+
+function catLabel(c){
+  return (String(c.id) === '0') ? '全部' : c.name;
+}
+
+function renderCatSortRow(){
+  return '<div class="cat-row" style="margin:10px 0 8px"><span class="cat-cap">排序</span>' +
+    COMIC18_SORT_OPTIONS.map(s =>
+      `<button class="${state.catSort===s.o?'active':''}" onclick="setCatSort('${s.o}')">${s.label}</button>`
+    ).join('') + '</div>';
+}
+
+function renderTagBlocks(tree){
+  const blocks = (tree && tree.blocks) || [];
+  if(!blocks.length) return '';
+  const total = blocks.reduce((n,b)=>n+b.tags.length,0);
+  const body = blocks.map(b =>
+    '<div class="blk"><div class="blk-t">'+esc(b.title)+'</div><div class="chips">' +
+      b.tags.map(t =>
+        `<button class="${state.catKeyword===t?'active':''}" onclick="setCatKeyword('${esc(t)}')">${esc(t)}</button>`
+      ).join('') + '</div></div>'
+  ).join('');
+  return '<details class="tag-blocks"><summary>🏷 标签（'+total+'）</summary>' + body + '</details>';
+}
+
+async function renderCategory(){
+  const bar = document.getElementById('catFilters');
+  if(SRC_KEY === 'comic18'){
+    const tree = await loadCatTree();
+    const cats = (tree && tree.categories) || [];
+    const hint = (tree && tree.error)
+      ? '<div class="cat-hint err">分类表取数失败：' + esc(tree.error) + '（已退化为按「全部」浏览）</div>'
+      : '<div class="cat-hint">分类/标签按<b>关键词匹配</b>取数（该接口不支持按分类 id 过滤），结果可能与官方分类页有偏差。</div>';
+    const tabs = cats.length ? cats : [{ id:'0', name:'全部', subs:[] }];
+    bar.innerHTML =
+      '<div class="cat-row">' + tabs.map(c => {
+        const active = String(state.categoryId) === String(c.id);
+        return `<button class="${active?'active':''}" onclick="setCat('${c.id}')" title="${esc(c.slug||'')}">${esc(catLabel(c))}</button>`;
+      }).join('') + '</div>' +
+      renderCatSortRow() +
+      renderTagBlocks(tree) +
+      hint;
+    loadCategory(true);
+    return;
+  }
+  /* 其他源：沿用栏目式 tab */
+  bar.innerHTML = '<div class="cat-row">' + CAT_TABS.map(t => {
+    const active = state.homeType === t.type;
+    return `<button class="${active?'active':''}" onclick="setCat(${t.type})">${t.label}</button>`;
+  }).join('') + '</div>';
   loadCategory(true);
 }
-function setCat(id, resetPage = true){
-  if(SRC_KEY==='comic18'){ state.categoryId = id; }
-  else { state.homeType = id; }
-  if (resetPage) state.homePage = 1;   // 重新选择分类时重置分页
+
+/** 选大类：id='0' 视为全部（不带关键词，直接走列表接口） */
+function setCat(id){
+  if(SRC_KEY !== 'comic18'){ state.homeType = Number(id) || 0; state.homePage = 1; renderCategory(); return; }
+  const tree = state.catTree || { categories: [] };
+  const c = (tree.categories || []).find(x => String(x.id) === String(id));
+  state.categoryId = String(id);
+  state.catKeyword = (c && String(c.id) !== '0') ? c.name : '';
+  state.homePage = 1;
+  renderCategory();
+}
+
+/** 选标签（或子分类）：清除大类高亮，走关键词 */
+function setCatKeyword(kw){
+  state.catKeyword = kw || '';
+  state.categoryId = '';
+  state.homePage = 1;
+  renderCategory();
+}
+
+function setCatSort(o){
+  state.catSort = o;
+  state.homePage = 1;
   renderCategory();
 }
 /** 详情页 facets 渲染：根据源配置动态生成可点击元素 */
 function renderFacets(info){
   const el = document.getElementById('detailTags');
   if(!el) return;
-  const facets = (state.rules && state.rules.facets) || [];
+  /* facets 在 /api/source/rules 返回的源对象上（BOOK_SOURCES）。
+   * 早期这里读的是 state.rules —— 而 loadRules() 从来没赋过这个字段，
+   * 于是 facets 恒为空、详情页的标签/作者一个都渲染不出来（死代码）。 */
+  const facets = (BOOK_SOURCES && BOOK_SOURCES.facets) ||
+                 (state.rules && state.rules.facets) || [];
   if(!facets.length){ el.innerHTML = ''; return; }
   const parts = [];
   facets.forEach(f => {
@@ -804,7 +921,7 @@ function renderFacets(info){
     if(!val) return;
     if(f.type === 'tag'){
       // tags 是逗号分隔字符串，每个标签可点击
-      String(val).split(',').filter(Boolean).slice(0,20).forEach(t=>{
+      String(val).split(',').filter(Boolean).slice(0,12).forEach(t=>{
         parts.push('<span class="tag" style="cursor:pointer" onclick="facetClick(\''+esc(t).replace(/'/g,"\\'")+'\')">'+esc(t)+'</span>');
       });
     } else if(f.type === 'author'){
@@ -820,10 +937,13 @@ function renderFacets(info){
 
 /** facet 点击跳转：value 作为搜索词进入搜索页 */
 function facetClick(value){
+  /* 走快照而不是「先填输入框再 navigate」：navigate 会用 viewSnapshots.search
+   * 覆盖输入框，直接把关键词写进快照才是唯一可靠路径。 */
+  state.viewSnapshots.search = { keyword: value, scrollY: 0 };
+  state.searchKeyword = value;
   const si = document.getElementById('searchInput');
   if(si) si.value = value;
   navigate('search');
-  renderSearch();
 }
 
 /* 通用过滤函数：按指定字段过滤列表
@@ -851,25 +971,35 @@ function filterByDimension(list, dimension, value) {
 
 async function loadCategory(reset){
   const grid = document.getElementById('categoryGrid');
-  if(reset) grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>';
+  if(reset){ state.homePage = 1; grid.innerHTML = '<div class="empty-state"><span class="spinner"></span>取数中…</div>'; }
   try{
-    // comic18: 发送 categoryId → proxy.js 映射为 c 参数 → API 按分类过滤
-    // 其他源: 发送 homeType
-    const catType = (SRC_KEY === 'comic18') ? state.categoryId : state.homeType;
-    const params = {page:state.homePage, pageSize:12, type:catType, flag:1};
-    const d = await apiGet(frontPathOf('home','/api/home'), params);
-    let list = (d && (d.comicList||d.list)) || [];
-    // comic18: API 已按 c 参数过滤，无需前端过滤
-    // 其他源: 按 category.id 过滤
-    if (SRC_KEY !== 'comic18' && state.homeType) {
-      list = filterByDimension(list, 'category', String(state.homeType));
+    let d, list, total;
+    if(SRC_KEY === 'comic18'){
+      if(state.catKeyword){
+        /* 分类/标签 → 关键词搜索。上游 c 参数被忽略，这是唯一可行的近似路径。 */
+        d = await apiGet(frontPathOf('search','/api/search'),
+              {keyword: state.catKeyword, page: state.homePage, o: state.catSort});
+      }else{
+        d = await apiGet(frontPathOf('home','/api/home'),
+              {page: state.homePage, o: state.catSort});
+      }
+      list  = (d && (d.comicList || d.list)) || [];
+      total = Number(d && d.total) || list.length;
+    }else{
+      d = await apiGet(frontPathOf('home','/api/home'),
+            {page:state.homePage, pageSize:12, type:state.homeType, flag:1});
+      list = (d && (d.comicList||d.list)) || [];
+      if(state.homeType) list = filterByDimension(list, 'category', String(state.homeType));
+      total = (d && d.total) || list.length;
     }
-    state.homeTotal = (d && d.total) || list.length;
+    state.homeTotal = total;
     const html = list.map(cardHtml).join('');
     if(reset) grid.innerHTML = html || '<div class="empty-state">无数据</div>';
     else grid.insertAdjacentHTML('beforeend', html);
+    /* 上游每页固定 80 条（page_size 被忽略），用本页条数当页长推是否还有下一页 */
+    const pageLen = list.length || 80;
     document.getElementById('loadMore').style.display =
-      (state.homePage * 12 < state.homeTotal) ? 'block' : 'none';
+      (list.length && state.homePage * pageLen < total) ? 'block' : 'none';
   }catch(e){
     if(reset) grid.innerHTML = errBlock(e.message);
   }
@@ -936,6 +1066,9 @@ async function openDetail(id){
     document.getElementById('detailDesc').innerHTML = '<span class="err">'+esc(e.message)+'</span>';
   }
   try{
+    /* 先清空：上一部作品的章节若残留，取数失败时点「下一话」会串到别的作品 */
+    state.chapters = [];
+    applySingleChapterUI();
     const d = await apiGet(frontPathOf('chapters','/api/comic/') + id + '/chapters');
     const list = (d && d.list) || [];
     state.chapters = list;
@@ -1003,13 +1136,19 @@ async function openChapter(idx){
 /* ---------- 单话源（如 pixiv）：一作品一话，上下话无意义 ---------- */
 /** 是否单话源：仅 1 话且源声明了 fakeChapters */
 function isSingleChapterSource(){
-  const ad = BOOK_SOURCES && BOOK_SOURCES.adapt;
-  return !!(ad && ad.fakeChapters) && state.chapters.length <= 1;
+  /* 只有一话（或没取到章节）时，上下话入口没有意义。
+     早期只认 adapt.fakeChapters（pixiv 那种无章节源），但 comic18 存在
+     「series 为空、photo_id = album_id」的单话作品（CG 集/短篇，如 141130），
+     代理端已合成 1 话，这里必须同样置灰，否则点下一话会越界。 */
+  return state.chapters.length <= 1;
 }
 /** 单话源下把「上一话/下一话」相关入口置灰并给出说明 */
 function applySingleChapterUI(){
   const single = isSingleChapterSource();
-  document.body.classList.toggle('single-chap', single);
+  /* 只处理真实存在的按钮。这里早先按 'btnPrev'/'btnNext' 取元素，但工具栏
+     上那两个 button 当初没写 id，getElementById 恒为 null，置灰从未生效
+     （表现为点上一话/下一话毫无反应）。现在 HTML 已补 id，且 CSS 有
+     :disabled 样式，disabled 才是唯一需要维护的状态。 */
   ['btnPrev','btnNext'].forEach(id=>{
     const b = document.getElementById(id);
     if(b){ b.disabled = single; b.title = single ? '本作品仅 1 话' : ''; }
