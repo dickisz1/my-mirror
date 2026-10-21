@@ -579,6 +579,10 @@ function descrambleImg(img, num){
   }
   // 直接替换 img 为 canvas，避免 src 重新加载导致闪烁
   img.replaceWith(c);
+  /* 关键：解扰后的 canvas 必须同样限宽。
+     早先只有非切片图（num<=1）走了 applyNaturalWidthLimit，切片图换成 canvas 后
+     没有 max-width，于是 720 宽的原图被 .imgwrap 拉满到 760，白白重采样一次。 */
+  applyNaturalWidthLimit(c);
 }
 
 /* ============================================================
@@ -1535,8 +1539,16 @@ function setupContinuousLoader(){
   continuousObserver.observe(ensureSentinel());
 }
 
-/** 方案 C：限制最大显示宽度为原始分辨率，避免插值放大模糊 */
+/** 方案 C：限制最大显示宽度为原始分辨率，避免插值放大模糊。
+ *  为什么重要：阅读区内容宽 760px，而 18comic 的原图只有 720px 宽，
+ *  `.imgwrap img{width:100%}` 会把 720 拉伸到 760（1.06×）——浏览器重采样，
+ *  线条边缘变糊。限宽后是 1:1 映射，一个源像素对一个 CSS 像素，最锐。
+ *  翻页模式不用这套（那里恒为整屏 contain），所以直接跳过。 */
 function applyNaturalWidthLimit(el){
+  if(state.readMode === 'page') return;
+  /* 自定义宽度模式是用户**明确要求**放大，此时不能再压回原始宽度——
+     否则拖到 100% 看着像没生效。只有 fit/orig 这种"按内容自适应"的模式才限宽。 */
+  if(state.imgWidth === 'custom') return;
   const wrap = el.closest('.imgwrap');
   if(!wrap) return;
   // img 用 naturalWidth，canvas 用 width
@@ -2343,6 +2355,18 @@ function applyImgWidth(){
   area.style.setProperty('--reader-w', state.widthPct + 'vw');
   // 铺满/自定义/原始尺寸要突破 .container 的 1200px 限宽，否则"全宽"其实铺不满
   document.body.classList.toggle('reader-wide', wide && !paged);
+  /* 自定义宽度是用户明确要求放大：必须把 applyNaturalWidthLimit 之前写下的
+     inline max-width 清掉，否则图会被按在 720px，拖到 100% 看起来像没生效。 */
+  if(custom && !paged){
+    area.querySelectorAll('.imgwrap img, .imgwrap canvas').forEach(el=>{
+      el.style.maxWidth = ''; el.style.marginLeft = ''; el.style.marginRight = '';
+    });
+  }
+  /* 从自定义切回 fit/orig：之前清掉的限宽要补回来，否则图会一直停在 1.056× 拉伸态
+     （实测切回 fit 后 cssW=760 / 原图 720，必须重新落一次 max-width）。 */
+  if(!custom && !paged){
+    area.querySelectorAll('.imgwrap img, .imgwrap canvas').forEach(el=>applyNaturalWidthLimit(el));
+  }
   // 同步控件：滑杆 / 数值 / 预设按钮高亮
   const r = document.getElementById('widthRange');
   if(r) r.value = state.widthPct;

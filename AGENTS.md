@@ -419,6 +419,39 @@ background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 
 - `.imgwrap` 背景改透明后，loading 骨架仍靠 `.imgwrap.loading` 自己的渐变，不要指望父级底色。
 - 翻页模式另有一条 `#readerArea.paged > .imgwrap{background:#0a0a0a}`，那是刻意的整屏黑底，别删。
 
+#### 画质：上游只有 720px 宽，别指望"换个参数拿高清图"
+
+2026-10 实测（work 1114751 / `00003.webp`）：
+
+| 试法 | 结果 |
+|---|---|
+| `00003.webp` | 200，**720×4200**，86472 字节（≈0.23 bit/px，上游压得很狠） |
+| `.jpg` / `.png` / `.jpeg` | 502，不存在 |
+| `?w=1600` / `?width=1600` / `?resize=1` / `?quality=100` / `?v=2` | 200，尺寸仍是 720×4200 |
+| `?x-oss-process=image/resize,w_1600` | 200，字节数与不带参数完全一致（参数被忽略） |
+| 换 CDN 域名 `cdn-msp` / `cdn-msp2` / `cdn-msp3` | 全是 720×4200（msp3 是 89412 字节，只是编码差异，尺寸不变） |
+
+结论：**720px 是硬上限**，不存在更高分辨率的源。想"更清晰"只能靠超分/锐化。
+
+已经做的（免费且确定）：`applyNaturalWidthLimit` 现在对**解扰后的 canvas 也生效**。
+之前只有 `num<=1` 的非切片图走这条路，切片图 `img.replaceWith(canvas)` 后没有 max-width，
+于是 720 宽的原图被 `.imgwrap{width:100%}` 拉满到 760（1.056×），浏览器白重采样一次。
+现在 fit/orig 模式是 1:1 映射（720→720），`custom` 模式不限宽（用户明确要放大）。
+
+**已实测排除的方案**（DPR=2、2× 放大、300×300 裁片，Laplacian 边缘能量）：
+
+| `image-rendering` | laplacian | 结论 |
+|---|---|---|
+| `auto`（默认） | 0.37 | 基线 |
+| `-webkit-optimize-contrast` | 0.37 | **和 auto 完全一样，Chrome 里是空操作** |
+| `crisp-edges` / `pixelated` | 1.104 | 其实是最近邻，数字好看但会出马赛克块，不是"更清晰" |
+
+所以别加 `image-rendering`——没有收益，`crisp-edges` 反而更差。
+
+真正能提升的只剩客户端超分（Anime4K 的 GLSL 着色器最适合线条画，WebGL2/WebGPU 可跑；
+Real-ESRGAN 的 WASM/WebGPU 版本慢得多）。注意：超分不恢复信息，只是让线条更锐、压制压缩噪点。
+服务端超分不可行——Vercel Serverless 无 GPU、30s 上限、1GB 内存。
+
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
 阅读器里有**两条独立的栏**，都吸附、都能自动隐藏：
