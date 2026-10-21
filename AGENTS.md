@@ -416,6 +416,12 @@ background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 
 注意：
 - 不要再给 `#readerArea.continuous .imgwrap` 加 `margin-bottom`——它的 id+class+class 特异度会
   覆盖掉变量，导致「页间距」设置在连续阅读下永远失效（旧的 4px 规则已删）。
+- **`#readerArea.w-orig .imgwrap` 同样踩过这个坑（2026-10-21 才发现）**：原来写死
+  `margin:0 auto 4px`，`#readerArea.w-orig .imgwrap` 是 id+class+class，
+  特异度压过 `.imgwrap{margin-bottom:var(--img-gap)}`，
+  于是**「原始尺寸」模式下不管页间距选什么，永远留 4px 缝**。
+  实测注入旧规则时相邻两图间隙 = 4px，改后 = 0。判定方法：
+  `next.getBoundingClientRect().top - cur.getBoundingClientRect().bottom`，四种宽度模式都应恒为 0。
 - `.imgwrap` 背景改透明后，loading 骨架仍靠 `.imgwrap.loading` 自己的渐变，不要指望父级底色。
 - 翻页模式另有一条 `#readerArea.paged > .imgwrap{background:#0a0a0a}`，那是刻意的整屏黑底，别删。
 
@@ -448,9 +454,43 @@ background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 
 
 所以别加 `image-rendering`——没有收益，`crisp-edges` 反而更差。
 
-真正能提升的只剩客户端超分（Anime4K 的 GLSL 着色器最适合线条画，WebGL2/WebGPU 可跑；
-Real-ESRGAN 的 WASM/WebGPU 版本慢得多）。注意：超分不恢复信息，只是让线条更锐、压制压缩噪点。
-服务端超分不可行——Vercel Serverless 无 GPU、30s 上限、1GB 内存。
+真正能提升的只剩客户端超分。已实现，见下节。
+
+#### AI 超分（Anime4K Upscale_CNN_x2_S，WebGL2）
+
+设置面板「AI 超分：关 / 2×」，默认关。核心约束是**显存**：
+
+- 720×4200 超分到 1440×8400 = 12.1M 像素，**一张的 RGBA 位图 48MB**。一话 125 张全量 = 6GB，必崩。
+  所以：`A4K_MAX = 2`（LRU，翻走就 `replaceWith(orig)` 换回原图并 `width=1` 释放位图）；
+  观察器 `rootMargin:'100% 0px'`，只对"视口上下各一屏"内的图入队；队列串行 + 块间 `await setTimeout(0)` 让出主线程。
+- **中间层必须用 `RGBA16F`**（`EXT_color_buffer_half_float` / `EXT_color_buffer_float`）。
+  CNN 权重有负项，8 位整数纹理会把负值截成 0，结果全错。拿不到扩展时 `a4kInit()` 返回 false，开关自动弹回关。
+- **分块**：`MAX_TEXTURE_SIZE` 在部分机器上是 4096，而 2×4200=8400 本身就超了。
+  按源图高度切块，块内 `PAD=4` 重叠（CNN 3 层 3×3，感受野半径 3，留 1px 余量），
+  输出时只取中间可用部分，`drawImage` 1:1 贴进目标画布。
+- **不要翻转 Y**：整条链路按"纹素 0 = 图像第一行"走，最后一步才用翻 Y 的顶点着色器
+  （`A4K_VS_FLIP`，`gl_Position = vec4(clipSpace * vec2(1,-1), ...)`）。
+  上游 anime4k.js 也是这么干的（见 `dist/glsl/passthrough.cjs` 的 `flip` 顶点着色器）。
+  在 `texImage2D` 上加 `UNPACK_FLIP_Y_WEBGL` 会让卷积核垂直镜像，等于换了个滤波器。
+- 着色器来源：npm `anime4k.js@1.1.3` tarball → `dist/glsl/Upscale/Anime4K_Upscale_CNN_x2_S.cjs`，
+  用正则抠 `const fragment_N_shader = \`...\`` 的字符串，19KB 全量内联进单文件（无额外请求）。
+  注意：该 `.cjs` 是 43KB，但其中 24KB 是驱动类的样板代码，实际 GLSL 只有 19KB。
+
+**为什么输出 2 倍却仍限宽回原始 720**：`.imgwrap img, .imgwrap canvas{width:100%}` + 宽高比不变
+→ 高度完全不变 → 换图零布局跳动（实测 beforeH 4200 / afterH 4200）。
+收益发生在**设备像素**层：CSS 宽 720px 在 DPR=2 上占 1520 个设备像素，
+原本只能把 720 个源像素双线性拉伸过去；换成 1440 像素的真图后接近 1:1。
+DPR=1 且不放大时二者等价——这是物理上限，不是没生效。
+
+实测（Chromium + SwiftShader 软件渲染，真 GPU 快一个量级；对 1440px 原图取 PSNR / Laplacian）：
+
+| 方案 | PSNR | 拉普拉斯能量 |
+|---|---|---|
+| 浏览器双线性放大到 2× | 25.99 dB | 19.22 |
+| Anime4K CNN x2 | **35.51 dB** | **33.47** |
+| （参考）原始 1440 真图 | 99 dB | 36.85 |
+
+720×4200 单张 1.6 s（软件渲染）。`w0*h0 > 6e6` 的图直接跳过，避免卡死。
 
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
@@ -610,9 +650,12 @@ Real-ESRGAN 的 WASM/WebGPU 版本慢得多）。注意：超分不恢复信息�
 
 ### 部署须知
 
-- 本仓库**未配置 Vercel Git 集成**（无 webhook），`git push` 不会自动触发部署。
+- **已配置 Vercel Git 集成**：`git push origin HEAD:main` 后 Vercel 自动部署，约 1–2 分钟生效。
+  2026-10-21 实测：push 后线上设置面板立刻出现「页间距 / AI 超分」，确认自动化链路可用。
+  （本文此前写的"未配置 Git 集成"已作废。）
 - 部署需本机已 `vercel login`。未登录时只能创建匿名临时部署，且临时部署会过期。
 - 若本机 `*.vercel.app` 域名解析被污染，浏览器/curl 无法直连站点，需用中转服务或改 hosts 验证。
+- 沙箱内 `curl` 访问自定义域名会返回 `HTTP 000`，验证线上内容要用 WebFetch，别当成部署失败。
 
 ## 禁止事项
 
