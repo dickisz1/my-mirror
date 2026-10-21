@@ -321,6 +321,17 @@ const SOURCES = {
         params: [],
         match: /^\/api\/categories$/
       },
+
+      /* 官方首页推荐位：一次返回 8 个块（每块 30 部）。
+       * 代理端只保留 type 为 promote / not_in_category_id / category_id 的块，
+       * 丢掉 library（书库 id 不是 album id）与 novels（小说，无图）。 */
+      promote: {
+        desc: '首页推荐位',
+        frontPath: '/api/promote',
+        path: '/promote',
+        params: [],
+        match: /^\/api\/promote$/
+      },
       detail: {
         desc: '作品详情',
         frontPath: '/api/comic/',
@@ -350,9 +361,9 @@ const SOURCES = {
       }
     },
 
-    homeSections: [
-      { grid: 'popularGrid',  title: '🔥 全部', key: 'comicList' }
-    ],
+    /* 首页由 rules.promote 的 8 个官方推荐位驱动（见 serveData 的 promote 分支），
+     * 不再用固定栏目，所以这里是空数组：前端据此隐藏所有静态栏目。 */
+    homeSections: [],
 
     /* 详情页可点击维度（facets）：前端根据此配置动态渲染可点击元素 */
     facets: [
@@ -894,6 +905,25 @@ function toComic18Cover(path) {
   return 'https://' + domain + path;
 }
 
+/** 18comic 列表项（/categories/filter、/search、/promote 的 content[]）→ 前端卡片结构。
+ *  这三处字段完全一致，抽出来避免三份拷贝走形。 */
+function comic18MapListItem(it) {
+  // 列表页 image 为空，用 album id 构造封面 URL
+  const coverPath = it.cover || it.thumb || it.image || ('/media/albums/' + it.id + '.jpg');
+  return {
+    id: String(it.id || ''),
+    title: it.name || '',
+    pic: toComic18Cover(coverPath),
+    author: (it.author && it.author.length ? it.author[0] : '') || '',
+    tags: (it.category && it.category.title) || '',
+    category: it.category || null,  // 保留 category.id 供前端过滤
+    tHits: Number(it.total_views) || 0,
+    collection: 0,
+    status: 1,
+    intro: ''
+  };
+}
+
 /** get_num 的 JS 版本（与 jmcomic Python 一致） */
 function comic18GetNum(scrambleId, aid, filename) {
   scrambleId = parseInt(scrambleId) || 0;
@@ -1196,24 +1226,29 @@ async function serveData(src, action, rule, target, query, req, res) {
       // home/search：把 content 映射成前端认的 list/comicList
       if ((action === 'home' || action === 'search') && j.data && j.data.content) {
         const arr = Array.isArray(j.data.content) ? j.data.content : [];
-        const list = arr.map(it => {
-          // 列表页 image 为空，用 album id 构造封面 URL
-          const coverPath = it.cover || it.thumb || ('/media/albums/' + it.id + '.jpg');
-          return {
-            id: String(it.id || ''),
-            title: it.name || '',
-            pic: toComic18Cover(coverPath),
-            author: (it.author && it.author.length ? it.author[0] : '') || '',
-            tags: (it.category && it.category.title) || '',
-            category: it.category || null,  // 保留 category.id 供前端过滤
-            tHits: Number(it.total_views) || 0,
-            collection: 0,
-            status: 1,
-            intro: ''
-          };
-        }).filter(x => x.id);
+        const list = arr.map(comic18MapListItem).filter(x => x.id);
         j.data.list = list;
         j.data.comicList = list;
+      }
+
+      /* promote：官方首页推荐位，8 个块（每块 30 部）。
+       * 但只有前 6 个是「漫画相册」，后两个是别的实体，必须过滤掉：
+       *   library → 书库条目（id 是书库 id，如 3310828，点进 /album 打不开）
+       *   novels  → 小说（没有图片，阅读器无法渲染）
+       * 这也是为什么这里按 type 白名单，而不是全量透传。 */
+      if (action === 'promote' && Array.isArray(j.data)) {
+        const ALLOW_TYPES = ['promote', 'not_in_category_id', 'category_id'];
+        const blocks = j.data
+          .filter(b => b && ALLOW_TYPES.indexOf(b.type) >= 0)
+          .map(b => ({
+            // 上游标题带运营提示，如「连载更新→右滑看更多→」，去掉尾部箭头段
+            title: String(b.title || '').replace(/→[^→]*→\s*$/, '').trim(),
+            type: b.type,
+            filterVal: b.filter_val == null ? '' : String(b.filter_val),
+            list: (Array.isArray(b.content) ? b.content : []).map(comic18MapListItem).filter(x => x.id)
+          }))
+          .filter(b => b.title && b.list.length);
+        j.data = { blocks: blocks };
       }
 
       // detail/chapters：区分 /album 和 /api/comic/{id}/chapters 两种响应格式

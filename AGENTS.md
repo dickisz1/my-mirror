@@ -396,7 +396,8 @@ Pixiv 官方原文（pixiv.help）：
 - 右键菜单在**点击别处 / 滚动 / Esc / 离开阅读器**时关闭；`resetReaderMouseUI()` 统一复位。
 - 事件只绑一次（`MOUSE_UI.bound`），绑在 `#readerArea` 上，避免与双栏/面板按钮冲突。
 - 未加载的图片（无 `src`）不提供"复制图片链接"项。
-- **未实现（有意放弃）**：`Z` 缩略图预览、`L` 喜欢、`B` 收藏、⑥ 阅读方向切换（我们是竖向滚动，无左右读概念）；源站也没有点赞/收藏数据。
+- **未实现（有意放弃）**：`Z` 缩略图预览、`L` 喜欢、`B` 收藏；源站也没有点赞/收藏数据。
+  （阅读方向切换已实现，见下面「阅读模式：竖向滚动 / 左右翻页」。）
 
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
@@ -418,6 +419,62 @@ Pixiv 官方原文（pixiv.help）：
 - `body.in-reader` 只负责 `#view-reader` 的 `padding-bottom:64px`（内容不被底部栏遮住），**不再隐藏上栏**。
 - 设置/规则面板吸附在**下栏上方**（`bottom:56px`）从底部弹出；面板打开时下栏不隐藏（否则面板会被一起吃掉，表现为"点设置没反应"）。
 - `scrollToImg()` 用 `stickyOffset()` 只计算**下栏**高度（顶部无吸附栏需要避让）；下栏隐藏时留白回落到 10px。
+
+#### 阅读模式：竖向滚动 / 左右翻页（RTL、双页）
+
+2026-10 新增。核心取舍：**不另建渲染管线**，把同一个 `#readerArea` 从「竖向 block 容器」切换成
+「横向 scroll-snap 分页器」，靠 `#readerArea.paged` 这一个类名切换。这样懒加载 IO、双击放大、
+话内位置记忆、进度计算全部复用；代价是所有「用 Y 轴算位置」的函数都必须加翻页分支。
+
+| state 字段 | 取值 | 说明 |
+|---|---|---|
+| `readMode` | `scroll` / `page` | 竖向滚动 / 左右翻页，默认 `scroll` |
+| `readDir` | `ltr` / `rtl` | 仅 `page` 生效；日漫用 `rtl` |
+| `spread` | `1` / `2` | 仅 `page` 生效；双页把相邻两张包进 `.spread` |
+
+**CSS 关键点**
+
+- `#readerArea.paged{position:fixed;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory}`
+  每屏 `.imgwrap`（或 `.spread`）是 `flex:0 0 100%; height:100%; scroll-snap-align:center`。
+- RTL 用 **`direction:rtl`**，**不要用 `flex-direction:row-reverse`**：后者会把第 0 页排到最右，
+  但滚动原点仍在左侧，初始 `scrollLeft=0` 会停在**最后一页**。`direction:rtl` 的滚动原点本身就在右侧。
+- 图片用 `width:auto;height:auto;max-width:100%;max-height:100%`（而不是 `width:100%;height:100%` +
+  `object-fit:contain`）：前者元素盒=内容盒，天然按固有比例居中，不留不确定的 letterbox。
+- `.paged` 段必须写在 `#readerArea.w-*` **之后**——同特异度靠书写顺序决胜负。
+- `body.reader-paged{overflow:hidden}` 锁页面滚动；离开阅读器时 `leaveReaderTopbar` 必须摘掉这个类，
+  否则整个站都不能滚。
+
+**JS 关键点（都是踩过的坑）**
+
+1. **`offsetParent` 判可见性会失效**：`position:fixed` 元素的 `offsetParent` 恒为 `null`，
+   `updateProgressUI` 里原来那句 `area.offsetParent === null → return` 会让翻页模式永远不更新进度。
+   已改成 `area.getBoundingClientRect().width === 0`。
+2. **页码不能读 `.cimg` 的 `data-i`**：18comic 的图是切片乱序的，`descrambleImg` 里
+   `img.replaceWith(canvas)` 会把 `.cimg` 节点连 `data-i` 一起干掉。已加载的页读 `.cimg` 得 `null`，
+   表现为「翻页后页码卡在第 3 张不动」。统一用 `figIndexOf(fig)` 解析 `fig-N` 的 id。
+3. **滚动事件在容器上，不在 window 上**：翻页模式的滚动发生在 `#readerArea` 内部，不会冒泡到
+   `window.scroll`。已在 `bindReaderMouseUI` 里单独挂 `area.addEventListener('scroll', ...)`（rAF 节流）。
+4. **滚动位置用 `scrollIntoView({inline:'center',block:'nearest'})`，不用 `scrollLeft`**：
+   RTL 容器的 `scrollLeft` 在 Chrome 是负值、Firefox 是正值，算出来必然分叉。
+5. **懒加载 `rootMargin:300px` 在横向不够**：竖向 300px 够覆盖半张长图，横向一屏就是 1440px，
+   只够 0.2 屏，快速连翻会撞空白。已加 `prefetchAhead(k)`（`PAGED_PREFETCH=3`），按「屏」预取，
+   与 IO 互补。
+6. **`applyNaturalWidthLimit` 的 inline `max-width` 要清掉**：那是竖向模式给「比容器窄的小图」加的，
+   翻页模式下会让图缩成一小块浮在屏幕中间。`applyReadMode` 进翻页时会清 `maxWidth/marginLeft/marginRight`。
+7. **双页分组要幂等**：`regroupSpreads()` 先 `ungroupSpreads()` 再两两包 `.spread`，
+   切换/重渲染随便调；奇数张时最后一张单独占一屏。
+8. **方向键跟着阅读方向走**：RTL 时 `←` 才是「往前读」。竖向模式保持 `←→` 切话的原语义。
+9. **翻页模式下关掉自动滚动与连续阅读**（`applyReadMode` 调 `stopAutoScroll` / `disableContinuous`，
+   `toggleAutoScroll` / `toggleContinuous` 也各自拒绝并提示）：两者都是竖向像素/哨兵模型，
+   在翻页模式里没有对应语义；翻页模式到末页本来就会自动进下一话，功能已被覆盖。
+
+**已知限制（有意不做）**
+
+- 翻页模式是「一屏一整页」。条漫/长条图（实测本源 720×4200，比例 0.17）整屏 contain 后只剩
+  154×900 的一条细缝。这不是 bug，是整页显示对长条图的必然结果。`currentPageRatio()` 会在切换时
+  检测（阈值 `w/h < 0.45`）并提示用户改用竖向滚动，**不要试图在翻页模式里给单页加纵向滚动**——
+  那会在横向 snap 容器里套纵向 scroller，触摸手势和 `scroll-snap` 必然打架。
+- 双页固定从第 1 张开始两两配对，没有「封面单页」偏移。
 
 ### `vercel.json`（部署配置）
 

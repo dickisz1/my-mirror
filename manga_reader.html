@@ -16,7 +16,7 @@ header nav button.nav-back{border-color:var(--accent);color:var(--accent);font-w
 .view{display:none}.view.active{display:block}
 .section{margin-bottom:24px}.section h2{font-size:16px;margin-bottom:12px;color:var(--accent);display:flex;align-items:center;gap:8px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px}
-.card{background:var(--card);border-radius:8px;overflow:hidden;cursor:pointer;transition:transform .2s;border:1px solid transparent}
+.card{background:var(--card);border-radius:8px;overflow:hidden;cursor:pointer;transition:transform .2s;border:1px solid transparent;position:relative}
 .card:hover{transform:translateY(-4px);border-color:var(--accent)}
 .card img{width:100%;aspect-ratio:3/4;object-fit:cover;background:#000;display:block}
 .card .info{padding:8px 10px}
@@ -106,6 +106,14 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 .tag-blocks .chips button{padding:3px 10px;font-size:11px;border:1px solid var(--ln);background:var(--card);color:var(--fg);border-radius:12px;cursor:pointer}
 .tag-blocks .chips button:hover,.tag-blocks .chips button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .cat-hint{font-size:11px;color:var(--mut);margin:0 0 10px;line-height:1.6}
+/* 书架：导航红点 / 详情页操作按钮 / 卡片更新角标 */
+.nav-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:4px;vertical-align:top}
+.detail-actions{margin:0 0 12px;display:flex;gap:8px;flex-wrap:wrap}
+.detail-actions button{padding:6px 14px;border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:6px;cursor:pointer;font-size:13px}
+.detail-actions button.on{background:var(--accent);color:#fff}
+.shelf-badge{position:absolute;top:6px;right:6px;background:var(--accent);color:#fff;font-size:11px;
+  padding:1px 7px;border-radius:10px;z-index:2;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.shelf-tip{font-size:11px;color:var(--mut);margin:0 0 10px}
 /* 连续阅读模式 */
 .chap-sep{display:flex;align-items:center;gap:12px;margin:32px 0 16px;color:var(--mut);font-size:13px}
 .chap-sep::before,.chap-sep::after{content:'';flex:1;height:1px;background:var(--ln)}
@@ -123,6 +131,11 @@ input#searchInput{width:100%;padding:10px 14px;background:var(--card);border:1px
 #readerTools label{color:var(--mut);min-width:56px}
 #readerTools button{padding:4px 12px;border:1px solid var(--ln);background:transparent;color:var(--mut);border-radius:4px;cursor:pointer;font-size:12px}
 #readerTools button.active,#readerTools button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* 置灰态：阅读方向/每屏页数在竖向滚动模式下无意义（需先切「左右翻页」） */
+#readerTools button:disabled{opacity:.35;cursor:not-allowed;filter:grayscale(1)}
+#readerTools button:disabled:hover{background:transparent;color:var(--mut);border-color:var(--ln)}
+/* 翻页模式：整屏分页器接管滚动，页面本身不能再滚（否则触控板会同时滚两层） */
+body.reader-paged{overflow:hidden}
 #readerTools input[type=range]{width:150px;accent-color:var(--accent)}
 #readerTools .val{color:var(--mut);min-width:38px;text-align:right}
 /* 宽度模式：w-fit 适应宽度 / w-orig 原始尺寸 / w-pct 自定义百分比（滑杆）
@@ -159,6 +172,34 @@ body.reader-wide .container{max-width:none;padding:0}
 .imgwrap.zoomed{position:fixed;inset:0;z-index:250;background:rgba(0,0,0,.97);margin:0;border-radius:0;overflow:auto;cursor:zoom-out;min-height:0}
 .imgwrap.zoomed img{width:auto;max-width:100%;height:auto;margin:0 auto;display:block;object-fit:contain;background:transparent}
 body.zoomed{overflow:hidden}
+/* ---------- 翻页模式（page）：整屏横向分页，支持 RTL / 双页 ----------
+   与竖向滚动**共用同一份 DOM**（figure.imgwrap），只把容器换成横向 scroll-snap 分页器。
+   这样懒加载 IntersectionObserver、双击放大、进度计算、话内位置记忆全部原样复用，
+   不需要第二套渲染管线（多一套就会有两套 bug）。
+   注意：本段必须排在 #readerArea.w-* 之后 —— 同特异度下靠书写顺序决胜负。 */
+#readerArea.paged{position:fixed;left:0;right:0;top:0;bottom:0;max-width:none;margin:0;padding:0;
+  display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;background:#0a0a0a;z-index:1;scrollbar-width:none}
+#readerArea.paged::-webkit-scrollbar{display:none}
+/* RTL 用 direction，不用 flex-direction:row-reverse。
+   row-reverse 会把"第 0 页"排到最右，但**滚动原点仍在左侧**，初始 scrollLeft=0 停在最后一页；
+   direction:rtl 的滚动原点本身就在右侧，第 0 页天然位于右端，且符合浏览器原生的 RTL 语义。 */
+#readerArea.paged.rtl{direction:rtl}
+#readerArea.paged > .imgwrap,
+#readerArea.paged > .spread{flex:0 0 100%;width:100%;height:100%;margin:0;border-radius:0;min-height:0;
+  background:#0a0a0a;scroll-snap-align:center;scroll-snap-stop:always;
+  display:flex;align-items:center;justify-content:center}
+#readerArea.paged > .imgwrap img,
+#readerArea.paged > .imgwrap canvas{width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain}
+/* 双页：两图并排占一屏（.spread 由 regroupSpreads() 动态包出来） */
+#readerArea.paged > .spread{flex-direction:row;gap:0}
+#readerArea.paged > .spread > .imgwrap{flex:1 1 50%;width:50%;height:100%;margin:0;border-radius:0;
+  min-height:0;scroll-snap-align:none;display:flex;align-items:center;justify-content:center}
+#readerArea.paged > .spread > .imgwrap img,
+#readerArea.paged > .spread > .imgwrap canvas{width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain}
+/* 翻页模式下哨兵与章节分隔不参与分页（连续阅读在翻页模式下关闭） */
+#readerArea.paged > #readerSentinel,
+#readerArea.paged > .chap-sep{display:none}
 /* 右键快捷菜单 */
 .ctxmenu{position:fixed;z-index:400;background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:4px 0;min-width:172px;display:none;box-shadow:0 8px 28px rgba(0,0,0,.55)}
 .ctxmenu.on{display:block}
@@ -175,6 +216,7 @@ body.zoomed{overflow:hidden}
     <button id="btnBack" class="nav-back" onclick="goBack()" title="返回上一页" style="display:none">← 返回</button>
     <button id="btnHome" class="active" onclick="navigate('home')">首页</button>
     <button id="btnCategory" onclick="navigate('category')">分类</button>
+    <button id="btnShelf" onclick="navigate('shelf')">书架<span id="shelfDot" class="nav-dot" style="display:none"></span></button>
     <button id="btnSearch" onclick="navigate('search')">搜索</button>
   </nav>
 </header>
@@ -186,6 +228,8 @@ body.zoomed{overflow:hidden}
       <h2>📖 继续阅读</h2>
       <div class="grid" id="continueGrid"><div class="empty-state"><div class="icon">📚</div>暂无阅读记录</div></div>
     </div>
+    <!-- 动态栏目容器：由源下发的推荐位/栏目块渲染（comic18 的 8 个官方推荐位走这里） -->
+    <div id="homeDynamic"></div>
     <div class="section" id="popularSection"><h2>🔥 热门推荐</h2><div class="grid" id="popularGrid"></div></div>
     <div class="section" id="latestSection"><h2>🆕 最新更新</h2><div class="grid" id="latestGrid"></div></div>
     <div class="section" id="vipSection"><h2>⭐ VIP专区</h2><div class="grid" id="vipGrid"></div></div>
@@ -199,6 +243,12 @@ body.zoomed{overflow:hidden}
     <div class="filter-bar" id="catFilters"></div>
     <div class="grid" id="categoryGrid"></div>
     <button id="loadMore" onclick="loadMoreCategory()">↓ 加载更多</button>
+  </div>
+
+  <!-- 书架 -->
+  <div id="view-shelf" class="view">
+    <div class="filter-bar" id="shelfBar"></div>
+    <div class="grid" id="shelfGrid"></div>
   </div>
 
   <!-- 搜索 -->
@@ -216,6 +266,7 @@ body.zoomed{overflow:hidden}
         <h1 id="detailTitle"></h1>
         <div class="author" id="detailAuthor"></div>
         <div class="stats" id="detailStats"></div>
+        <div class="detail-actions" id="detailActions"></div>
         <div class="tags" id="detailTags"></div>
         <div class="desc" id="detailDesc"></div>
       </div>
@@ -243,6 +294,24 @@ body.zoomed{overflow:hidden}
       </div>
     </div>
     <div id="readerTools">
+      <div class="row">
+        <label>阅读模式</label>
+        <button id="rmode-scroll" onclick="setReadMode('scroll')">竖向滚动</button>
+        <button id="rmode-page"   onclick="setReadMode('page')">左右翻页</button>
+        <span style="color:var(--mut);font-size:11px">条漫用竖向；日漫用左右翻页 + 右→左</span>
+      </div>
+      <div class="row">
+        <label>阅读方向</label>
+        <button id="rdir-ltr" onclick="setReadDir('ltr')">左 → 右</button>
+        <button id="rdir-rtl" onclick="setReadDir('rtl')">右 → 左</button>
+        <span style="color:var(--mut);font-size:11px">仅翻页模式生效</span>
+      </div>
+      <div class="row">
+        <label>每屏页数</label>
+        <button id="rspread-1" onclick="setSpread(1)">单页</button>
+        <button id="rspread-2" onclick="setSpread(2)">双页</button>
+        <span style="color:var(--mut);font-size:11px">仅翻页模式生效 · 双页从第 1 张起两两配对</span>
+      </div>
       <div class="row">
         <label>图片宽度</label>
         <input type="range" id="widthRange" min="30" max="100" step="5" value="100" oninput="setImgWidthPct(this.value)">
@@ -286,7 +355,7 @@ body.zoomed{overflow:hidden}
     </div>
     <div id="rulesPanel"></div>
     <div id="readerArea"></div>
-    <div style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单</div>
+    <div id="readerHint" style="padding:20px;text-align:center;color:var(--mut);font-size:12px">键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单</div>
   </div>
 </div>
 
@@ -380,6 +449,8 @@ async function switchSource(key){
   state.continuous = false; state.loadedChaps = {}; state.chapRanges = [];
   // 分类树与分类选择也是源相关的（comic18 的分类 id 对别的源毫无意义）
   state.catTree = null; state.categoryId = '0'; state.catKeyword = ''; state.catSort = 'mv';
+  // 书架按源隔离：追更结果也是源相关的，切源后作废
+  state.shelfUpdates = {};
   state.homePage = 1;
   stopAutoScroll();
   AUTOSCROLL.anchorPos = null;
@@ -509,6 +580,7 @@ const state = {
   catSort:'mv',      // comic18 分类页排序（mr/mv/mp/tf）
   catTree:null,      // comic18 分类树 {categories, blocks}，由 /api/categories 下发
   searchSort:'mr',   // comic18 搜索排序
+  shelfUpdates:{},   // 书架追更结果 {comicId: 新增话数}，仅内存（每次打开书架重算）
   searchKeyword:'', // 搜索关键词（快照恢复用）
   homePage:1,
   homeTotal:1,
@@ -521,6 +593,9 @@ const state = {
   viewPos:0,         // 视口当前图片下标（话内位置记忆）
   imgWidth:'fit',    // 图片宽度模式：fit 适应宽度 / orig 原始尺寸 / custom 自定义百分比
   widthPct:100,      // 自定义宽度：阅读区宽度占视口的百分比（30–100）
+  readMode:'scroll', // 阅读模式：scroll 竖向滚动（条漫）/ page 左右翻页（日漫）
+  readDir:'ltr',     // 翻页方向：ltr 左→右 / rtl 右→左（仅 readMode=page 生效）
+  spread:1,          // 每屏页数：1 单页 / 2 双页（仅 readMode=page 生效）
   brightness:100,    // 阅读区亮度百分比（30–130）
   autoSpeed:60,      // 自动滚动速度（像素/秒，10–300）
   autoStepMode:'px', // 自动推进方式：px 连续像素滚动 / img 逐张翻
@@ -596,8 +671,8 @@ function navigate(view, opts = {}){
   // 维护导航栈（返回按钮用）
   // replace 模式：替换栈顶（阅读器章节切换，不增加返回步数）
   // tab 切换：清空栈（tab 是平行入口，不是子级）
-  const isTabSwitch = (view === 'home' || view === 'category' || view === 'search') &&
-                      (prev === 'home' || prev === 'category' || prev === 'search');
+  const isTabSwitch = (view === 'home' || view === 'category' || view === 'search' || view === 'shelf') &&
+                      (prev === 'home' || prev === 'category' || prev === 'search' || prev === 'shelf');
   if(isTabSwitch){
     state.navStack = [];   // tab 切换清空栈
   } else if(opts.replace && state.navStack.length > 0){
@@ -622,7 +697,7 @@ function navigate(view, opts = {}){
   const el = document.getElementById('view-'+view);
   if(el) el.classList.add('active');
   document.querySelectorAll('header nav button').forEach(b=>b.classList.remove('active'));
-  const map = {home:'btnHome', category:'btnCategory', search:'btnSearch'};
+  const map = {home:'btnHome', category:'btnCategory', search:'btnSearch', shelf:'btnShelf'};
   if(map[view]) document.getElementById(map[view]).classList.add('active');
   // 返回按钮：有历史且不在首页时显示
   const btnBack = document.getElementById('btnBack');
@@ -676,6 +751,11 @@ function navigate(view, opts = {}){
     } else {
       renderCategory();
     }
+  }
+  if(view==='shelf'){
+    /* 先渲染本地书架（秒开），再后台检查更新（不阻塞首屏） */
+    renderShelf();
+    refreshShelf(false);
   }
   if(view==='search'){
     // 恢复搜索页状态快照
@@ -742,14 +822,35 @@ function cardHtml(item){
   </div>`;
 }
 
+const HOME_STATIC_GRIDS = ['popularGrid','latestGrid','vipGrid','gufengGrid','xuanhuanGrid','xiaoyuanGrid'];
+
+/** 隐藏并清空所有静态栏目（comic18 走推荐位、或本源没有这些栏目时用） */
+function hideStaticHomeSections(){
+  HOME_STATIC_GRIDS.forEach(g=>{
+    const el = document.getElementById(g);
+    if(!el) return;
+    el.innerHTML = '';
+    const sec = el.closest('.section');
+    if(sec) sec.style.display = 'none';
+  });
+}
+
 async function renderHome(){
   renderHistory();
+  const dyn = document.getElementById('homeDynamic');
+  /* 源声明了 promote 规则 → 首页由官方推荐位驱动（comic18）。
+   * 其余源（manwaxu/pixiv）仍用 homeSections + home 规则的老路径。 */
+  const usePromote = !!(BOOK_SOURCES.rules && BOOK_SOURCES.rules.promote);
+  if(usePromote){
+    if(dyn) dyn.innerHTML = '';
+    return renderHomePromote(dyn);
+  }
+  if(dyn) dyn.innerHTML = '';   // 切回老源时清掉动态栏目，避免残留
   // 栏目由当前源的 homeSections 决定（不同源栏目不同）
   const secs = BOOK_SOURCES.homeSections || BOOK_SOURCES_DEFAULT.homeSections;
-  const ALL_GRIDS = ['popularGrid','latestGrid','vipGrid','gufengGrid','xuanhuanGrid','xiaoyuanGrid'];
   const grids = secs.map(s=>s.grid);
   // 本源没有的栏目要清空，否则会残留上一个源的卡片
-  ALL_GRIDS.forEach(g=>{
+  HOME_STATIC_GRIDS.forEach(g=>{
     if(grids.indexOf(g) >= 0) return;
     const el = document.getElementById(g);
     if(!el) return;
@@ -776,6 +877,28 @@ async function renderHome(){
     secs.forEach(s=>fill(s.grid, pick(s.key)));
   }catch(e){
     grids.forEach(g=>{ const el=document.getElementById(g); if(el) el.innerHTML=errBlock(e.message); });
+  }
+}
+
+/** 推荐位首页：每个块渲染成一个 section（标题 + 卡片网格） */
+async function renderHomePromote(box){
+  if(!box) return;
+  hideStaticHomeSections();
+  box.innerHTML = '<div class="empty-state"><span class="spinner"></span>按书源规则取数中…</div>';
+  try{
+    const d = await apiGet(frontPathOf('promote','/api/promote'));
+    const blocks = (d && Array.isArray(d.blocks)) ? d.blocks : [];
+    if(!blocks.length){ box.innerHTML = '<div class="empty-state">暂无推荐数据</div>'; return; }
+    box.innerHTML = blocks.map((b, i) =>
+      '<div class="section">' +
+        '<h2>' + esc(b.title) + '<span class="src-badge">' + (b.list || []).length + '</span></h2>' +
+        '<div class="grid" id="dyn-' + i + '">' +
+          (b.list || []).map(it => cardHtml(it)).join('') +
+        '</div>' +
+      '</div>'
+    ).join('');
+  }catch(e){
+    box.innerHTML = errBlock(e.message);
   }
 }
 
@@ -1060,6 +1183,7 @@ async function openDetail(id){
       '<span>收藏: ' + fmt(info.collection || 0) + '</span>' +
       '<span>状态: ' + (info.status === 1 ? '连载中' : '完结') + '</span>';
     renderFacets(info);
+    renderDetailActions();   // 书架按钮（依赖 state.comic）
     document.getElementById('detailDesc').textContent = info.intro || info.description || '暂无简介';
   }catch(e){
     document.getElementById('detailTitle').textContent = '取数失败';
@@ -1073,6 +1197,7 @@ async function openDetail(id){
     const list = (d && d.list) || [];
     state.chapters = list;
     applySingleChapterUI();   // 单话源：置灰上下话入口
+    renderDetailActions();    // 章节数到位后再刷一次书架按钮（加入时要用到话数）
     document.getElementById('chapBadge').textContent = '规则 chapters · 共 ' + list.length + ' 话';
     document.getElementById('chapterList').innerHTML = list.length
       ? list.map((ch,i)=>`<div class="chap-item" onclick="openChapter(${i})">
@@ -1093,6 +1218,7 @@ async function openChapter(idx){
   if(!ch) return;
   state.chapIdx = idx;
   state.viewChapIdx = idx;
+  markShelfRead();   // 真正开读 → 该书架的「有新话」角标清零
   navigate('reader', { replace: true });   // 章节切换不增加栈深度
   document.getElementById('readerTitle').textContent = state.comic ? state.comic.title : '';
   document.getElementById('readerMeta').textContent = (ch.title||'') + ' · ' + (ch.picCount||'?') + '图';
@@ -1111,7 +1237,9 @@ async function openChapter(idx){
        </figure>`).join('');
     ensureSentinel();
     setupLazy();
-    applyImgWidth();   // 宽度模式（fit/full/orig）在重新渲染后需要重新落到 class 上
+    /* 重新渲染后必须重放显示模式：宽度模式（fit/orig/custom）与阅读模式（滚动/翻页、
+       双页分组）都是靠 class 落在 #readerArea 上的，innerHTML 重写会把结构打回扁平。 */
+    applyReadMode();
     AUTOSCROLL.anchorPos = null;   // 换话后图片集变了，锚点作废
     if(state.continuous){
       state.loadedChaps = {};
@@ -1232,6 +1360,12 @@ function backToDetail(){
 function scrollToImg(i){
   const fig = document.getElementById('fig-'+i);
   if(!fig) return;
+  if(state.readMode === 'page'){
+    // 翻页模式：滚到该图所在的那一屏（双页时是 .spread 容器）
+    const slot = fig.closest('.spread') || fig;
+    slot.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' });
+    return;
+  }
   const top = fig.getBoundingClientRect().top + window.scrollY - stickyOffset();
   window.scrollTo({top: Math.max(0, top), behavior:'smooth'});
 }
@@ -1297,6 +1431,12 @@ function ensureSentinel(){
 
 /* ---------- 连续阅读模式 ---------- */
 function toggleContinuous(){
+  if(state.readMode === 'page' && !state.continuous){
+    /* 连续阅读靠底部哨兵触发，翻页模式里没有"滚到底"这个事件；
+       而翻页模式本身到末页就会自动进下一话，功能上已经覆盖，所以直接拒绝而不是做半套。 */
+    showReaderToast('翻页模式已自动进下一话，无需连续阅读');
+    return;
+  }
   state.continuous = !state.continuous;
   const btn = document.getElementById('btnContinuous');
   if(btn){
@@ -1438,6 +1578,17 @@ function chapterAt(i){
 
 /** 计算当前视口所在的图片下标 */
 function computeViewPos(){
+  /* 翻页模式：滚动方向是横向，`r.bottom > probe` 这套纵向判定完全失效
+     （所有页的 top 都是 0）。改为取"中心线所在那一屏"的第一张图的全局下标。 */
+  if(state.readMode === 'page'){
+    const slots = pageSlots();
+    const k = currentSlotIdx();
+    if(k < 0 || !slots[k]) return -1;
+    const slot = slots[k];
+    const first = slot.classList.contains('spread') ? slot.querySelector('.imgwrap') : slot;
+    const n = figIndexOf(first);   // 不读 .cimg：解扰后 img 已换成 canvas
+    return isNaN(n) ? k : n;
+  }
   const figs = document.querySelectorAll('#readerArea .imgwrap');
   if(!figs.length) return -1;
   const probe = 90;   // 取视口顶部往下 90px 处作为"正在看"的判定线
@@ -1452,8 +1603,10 @@ function computeViewPos(){
 function updateProgressUI(){
   if(state.view!=='reader') return;
   const area = document.getElementById('readerArea');
-  // 视图被隐藏时所有 rect 归零，会把"当前话"误判成最后一话；隐藏时直接跳过
-  if(!area || area.offsetParent === null) return;
+  // 视图被隐藏时所有 rect 归零，会把"当前话"误判成最后一话；隐藏时直接跳过。
+  // 注意：position:fixed 元素的 offsetParent 恒为 null（翻页模式下会被误判成"视图隐藏"），
+  // 所以不能用 offsetParent 判可见性，改判宽度是否为 0。
+  if(!area || area.getBoundingClientRect().width === 0) return;
   const i = computeViewPos();
   if(i < 0) return;
   state.viewPos = i;
@@ -1640,6 +1793,8 @@ function enterReaderTopbar(){
 function leaveReaderTopbar(){
   cancelTopbarHide(); cancelHeaderHide();
   document.body.classList.remove('in-reader');
+  // 翻页模式给 body 加了 overflow:hidden，离开阅读器必须摘掉，否则整个站都不能滚了
+  document.body.classList.remove('reader-paged');
   const tools = document.getElementById('readerTools');
   if(tools) tools.classList.remove('on');
   const rules = document.getElementById('rulesPanel');
@@ -1703,8 +1858,13 @@ function updateAutoScrollBtn(){
 }
 
 function toggleAutoScroll(){
-  if(AUTOSCROLL.running) stopAutoScroll();
-  else startAutoScroll();
+  if(AUTOSCROLL.running){ stopAutoScroll(); return; }
+  if(state.readMode === 'page'){
+    // 自动滚动 = 竖向像素推进，翻页模式没有对应的"连续推进"语义，直接拒绝而不是假装能用
+    showReaderToast('翻页模式下不支持自动滚动，请切回「竖向滚动」');
+    return;
+  }
+  startAutoScroll();
 }
 
 function startAutoScroll(){
@@ -1861,17 +2021,40 @@ function unzoomImage(){
    条漫（webtoon）是一长条故事被切成多张短图连贯拼接，所以"翻页"= 翻下一张切图；
    到本章最后一张再点才进入下一话。按**视口高度**三等分（不是按图片高度），
    否则长图下会留出大片"点了没反应"的死区。 */
-function clickZoneAt(clientY){
+function clickZoneAt(clientX, clientY){
   const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
   if(!figs.length) return null;
   // 取当前视口内最靠上的那张图作为"放大"的目标（记元素本身，不是 rect）
   let target = null, best = Infinity;
-  for(const f of figs){
-    const r = f.getBoundingClientRect();
-    if(r.bottom <= 0) continue;
-    if(r.top < best){ best = r.top; target = f; }
+  if(state.readMode === 'page'){
+    // 翻页模式：放大目标 = 当前屏的第一张
+    const slots = pageSlots();
+    const k = currentSlotIdx();
+    if(k >= 0 && slots[k]){
+      const slot = slots[k];
+      target = slot.classList.contains('spread') ? slot.querySelector('.imgwrap') : slot;
+    }
+  }
+  if(!target){
+    for(const f of figs){
+      const r = f.getBoundingClientRect();
+      if(r.bottom <= 0) continue;
+      if(r.top < best){ best = r.top; target = f; }
+    }
   }
   if(!target) target = figs[figs.length - 1];
+
+  /* 翻页模式：横向三分（左=上一页 中=放大 右=下一页），
+     且 RTL 时左右语义互换——读者在右边按下一次，期望是"往前读"。 */
+  if(state.readMode === 'page'){
+    const vw = window.innerWidth;
+    let zone;
+    if(clientX < vw / 3) zone = 'prev';
+    else if(clientX > vw * 2 / 3) zone = 'next';
+    else return { zone: 'center', wrap: target };
+    if(state.readDir === 'rtl') zone = (zone === 'prev') ? 'next' : 'prev';
+    return { zone: zone, wrap: target };
+  }
 
   const vh = window.innerHeight;
   if(clientY < vh / 3) return { zone: 'prev', wrap: target };
@@ -1885,6 +2068,9 @@ function clickZoneAt(clientY){
  *  若直接读 state.viewPos，平滑途中读到的中间值会让推进节奏错乱（实测 1.5s 走了 3 张）。
  *  锚点在手动滚动/切话时复位。 */
 function scrollToAdjacentImage(dir){
+  /* 翻页模式：一次前进的是"一屏"（单页=1 张，双页=2 张），且推进靠 scroll-snap 定位，
+     不走下面的 anchorPos 那套（那是为竖向平滑滚动补丁的） */
+  if(state.readMode === 'page'){ turnPage(dir); return; }
   const figs = Array.from(document.querySelectorAll('#readerArea .imgwrap'));
   if(!figs.length) return;
   const base = (AUTOSCROLL.anchorPos !== null) ? AUTOSCROLL.anchorPos : Math.max(0, state.viewPos || 0);
@@ -1983,11 +2169,30 @@ function bindReaderMouseUI(){
     if(state.view !== 'reader') return;
     if(e.button !== 0) return;
     if(isZoomed()){ unzoomImage(); return; }
-    const hit = clickZoneAt(e.clientY);
+    const hit = clickZoneAt(e.clientX, e.clientY);
     if(!hit) return;
     if(hit.zone === 'center'){ toggleZoom(hit.wrap); return; }
     scrollToAdjacentImage(hit.zone === 'next' ? 1 : -1);
   });
+
+  /* 翻页模式的滚动发生在 #readerArea 内部（它是 overflow-x:auto 的分页器），
+     不会冒泡到 window 的 scroll 事件，进度/位置必须单独监听，否则顶栏一直停在第 1 页。 */
+  let areaScrollTick = false;
+  area.addEventListener('scroll', ()=>{
+    if(state.view !== 'reader' || state.readMode !== 'page') return;
+    if(areaScrollTick) return;
+    areaScrollTick = true;
+    requestAnimationFrame(()=>{
+      areaScrollTick = false;
+      updateProgressUI();
+      savePos();
+      // 滑到新的一屏 → 顺手把后面几屏铺上（拖动/触控板翻页走的是这条路径）
+      const k = currentSlotIdx();
+      if(k >= 0 && k !== _lastPrefetchSlot){ _lastPrefetchSlot = k; prefetchAhead(k); }
+    });
+  }, {passive:true});
+  // 分页器内部滚动时也要收起右键菜单（window 的 scroll 监听收不到）
+  area.addEventListener('scroll', closeCtxMenu, {passive:true});
 
   // 右键 → 快捷菜单
   area.addEventListener('contextmenu', e=>{
@@ -2023,6 +2228,9 @@ function loadReaderPrefs(){
     if(p.autoStepMode === 'img' || p.autoStepMode === 'px') state.autoStepMode = p.autoStepMode;
     if(typeof p.autoDwell === 'number') state.autoDwell = p.autoDwell;
     if(typeof p.showToast === 'boolean') state.showToast = p.showToast;
+    if(p.readMode === 'page' || p.readMode === 'scroll') state.readMode = p.readMode;
+    if(p.readDir === 'ltr' || p.readDir === 'rtl') state.readDir = p.readDir;
+    if(p.spread === 2 || p.spread === 1) state.spread = p.spread;
     if(typeof p.srcKey === 'string' && p.srcKey) SRC_KEY = p.srcKey;   // 记住上次用的书源
   }catch(e){}
   // 兼容旧值：full 曾是一个独立模式，现等价于自定义 100%
@@ -2031,9 +2239,10 @@ function loadReaderPrefs(){
   applyBrightness();
   applyAutoSpeedUI();
   applyAutoStepUI();
+  applyReadMode();      // 阅读模式/方向/双页：boot 时也要落到 DOM 上（否则刷新后类名丢失）
 }
 function saveReaderPrefs(){
-  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast, srcKey:SRC_KEY})); }catch(e){}
+  try{ localStorage.setItem('manga_prefs', JSON.stringify({imgWidth:state.imgWidth, widthPct:state.widthPct, brightness:state.brightness, autoSpeed:state.autoSpeed, autoStepMode:state.autoStepMode, autoDwell:state.autoDwell, showToast:state.showToast, readMode:state.readMode, readDir:state.readDir, spread:state.spread, srcKey:SRC_KEY})); }catch(e){}
 }
 
 /* ---------- 自动翻张：模式 / 停留 / 提示开关 ---------- */
@@ -2104,13 +2313,18 @@ function applyImgWidth(){
   if(!area) return;
   const custom = (state.imgWidth === 'custom');
   const wide = custom || state.imgWidth === 'orig';   // 需突破 .container 限宽的模式
+  const paged = (state.readMode === 'page');
   area.classList.remove('w-full','w-orig','w-pct');
-  if(state.imgWidth === 'orig') area.classList.add('w-orig');
-  if(custom) area.classList.add('w-pct');
+  /* 翻页模式：每屏恒为整屏 contain，宽度模式不适用。这里只剥类名不改控件值，
+     切回竖向滚动时 applyReadMode 会重新调用本函数把宽度模式还原。 */
+  if(!paged){
+    if(state.imgWidth === 'orig') area.classList.add('w-orig');
+    if(custom) area.classList.add('w-pct');
+  }
   // 自定义宽度：把百分比写进 CSS 变量，配合 #readerArea.w-pct{width:var(--reader-w)}
   area.style.setProperty('--reader-w', state.widthPct + 'vw');
   // 铺满/自定义/原始尺寸要突破 .container 的 1200px 限宽，否则"全宽"其实铺不满
-  document.body.classList.toggle('reader-wide', wide);
+  document.body.classList.toggle('reader-wide', wide && !paged);
   // 同步控件：滑杆 / 数值 / 预设按钮高亮
   const r = document.getElementById('widthRange');
   if(r) r.value = state.widthPct;
@@ -2120,6 +2334,260 @@ function applyImgWidth(){
   if(bf) bf.classList.toggle('active', state.imgWidth === 'fit');
   const bo = document.getElementById('wbtn-orig');
   if(bo) bo.classList.toggle('active', state.imgWidth === 'orig');
+}
+
+/* ---------- 阅读模式：竖向滚动 / 左右翻页（RTL、双页） ----------
+ * 设计取舍：翻页模式**不另建渲染管线**，而是把同一个 #readerArea 从
+ * 「竖向 block 容器」切换成「横向 scroll-snap 分页器」（见 CSS 的 .paged 段）。
+ * 好处：懒加载 IntersectionObserver、双击放大、进度计算、话内位置记忆
+ * 全部原样复用；坏处：所有"用 Y 轴算位置"的地方都要加翻页分支——
+ * 下面 computeViewPos / scrollToImg / scrollToAdjacentImage / clickZoneAt 都做了。
+ * 双页用动态包一层 .spread（regroupSpreads），而不是复制图片。 */
+
+/** 取图片容器的全局下标。
+ *  **不要读 .cimg 的 data-i**：18comic 的图是切片乱序的，解扰时 descrambleImg 会
+ *  `img.replaceWith(canvas)`，`.cimg` 节点当场消失、data-i 一起没了。
+ *  已加载的页读 .cimg 会得到 null（实测翻页模式下页码直接卡在第 3 张不动）。
+ *  figure 的 id="fig-N" 从渲染起就没变过，是唯一稳定来源。 */
+function figIndexOf(fig){
+  if(!fig) return NaN;
+  const m = /^fig-(\d+)$/.exec(fig.id || '');
+  return m ? parseInt(m[1], 10) : NaN;
+}
+
+/** 直接子级的图片容器（不含 .spread 内部、不含哨兵/分隔） */
+function directFigs(area){
+  if(!area) return [];
+  return Array.prototype.slice.call(area.children).filter(el => el.classList && el.classList.contains('imgwrap'));
+}
+
+/** 分页模式下的"屏"：每个直接子级 .imgwrap 或 .spread 都是一屏 */
+function pageSlots(){
+  const area = document.getElementById('readerArea');
+  if(!area) return [];
+  return Array.prototype.slice.call(area.children).filter(el =>
+    el.classList && (el.classList.contains('imgwrap') || el.classList.contains('spread')));
+}
+
+/** 翻页模式：显式预取当前屏之后的若干屏。
+ *  为什么不能只靠 IntersectionObserver：懒加载用的是 rootMargin:300px，
+ *  竖向滚动时 300px 够覆盖半张长图，但横向一屏就是 1440px，300px 只够 0.2 屏，
+ *  快速连翻会直接撞到空白页（实测连翻 4 页时后面仍是 loading 骨架）。
+ *  这里按"屏"预取，与 IO 互补：IO 负责回收视线内的，这里负责提前铺好后面几屏。 */
+const PAGED_PREFETCH = 3;   // 当前屏之后预取几屏
+let _lastPrefetchSlot = -1;
+
+function prefetchAhead(k){
+  if(state.readMode !== 'page') return;
+  const slots = pageSlots();
+  if(!slots.length) return;
+  for(let d = 0; d <= PAGED_PREFETCH; d++){
+    const slot = slots[k + d];
+    if(!slot) break;
+    const figs = slot.classList.contains('spread') ? Array.from(slot.querySelectorAll('.imgwrap')) : [slot];
+    figs.forEach(fig=>{
+      const img = fig.querySelector('.cimg');
+      if(!img || img.dataset.done) return;   // 已加载/已换成 canvas 的直接跳过
+      img.dataset.done = '1';
+      const i = figIndexOf(fig);
+      const src = state.flatImgs[i] && state.flatImgs[i].url;
+      const srcOrig = state.flatImgs[i] && state.flatImgs[i].urlOrig;
+      if(!src){ imgFail(img); return; }
+      img.src = (state.imgWidth === 'orig' && srcOrig) ? toProxyPath(srcOrig) : toProxyPath(src);
+      if(observer) observer.unobserve(img);
+    });
+  }
+}
+
+/** 双页：把相邻两张包进 .spread。先拆再包，保证幂等 */
+function regroupSpreads(){
+  const area = document.getElementById('readerArea');
+  if(!area) return;
+  ungroupSpreads();
+  if(state.spread !== 2) return;
+  const figs = directFigs(area);
+  // 奇数张时最后一张单独占一屏（不强行拉宽，避免半张空白）
+  for(let i = 0; i + 1 < figs.length; i += 2){
+    const a = figs[i], b = figs[i+1];
+    const wrap = document.createElement('div');
+    wrap.className = 'spread';
+    area.insertBefore(wrap, a);
+    wrap.appendChild(a);
+    wrap.appendChild(b);
+  }
+}
+function ungroupSpreads(){
+  const area = document.getElementById('readerArea');
+  if(!area) return;
+  Array.prototype.slice.call(area.querySelectorAll('.spread')).forEach(sp=>{
+    while(sp.firstChild) area.insertBefore(sp.firstChild, sp);   // 逐个前插，顺序保持不变
+    sp.remove();
+  });
+}
+
+/** 视口中心线落在哪一屏（方向无关：RTL 下矩形同样成立） */
+function currentSlotIdx(){
+  const slots = pageSlots();
+  if(!slots.length) return -1;
+  const cx = window.innerWidth / 2;
+  for(let k=0;k<slots.length;k++){
+    const r = slots[k].getBoundingClientRect();
+    if(r.left <= cx && r.right >= cx) return k;
+  }
+  // 兜底：取水平中心最近的一屏（快速滑动中可能出现瞬时缝隙）
+  let best = 0, bd = Infinity;
+  for(let k=0;k<slots.length;k++){
+    const r = slots[k].getBoundingClientRect();
+    const d = Math.abs((r.left + r.right) / 2 - cx);
+    if(d < bd){ bd = d; best = k; }
+  }
+  return best;
+}
+
+/** 滚到第 k 屏。用 scrollIntoView 而不是 scrollLeft：
+ *  RTL 容器的 scrollLeft 在 Chrome 是负值、Firefox 是正值，算出来必然分叉；
+ *  scrollIntoView 由浏览器按容器 direction 处理，两个方向同一份代码。 */
+function scrollToSlot(k, smooth){
+  const slots = pageSlots();
+  if(!slots.length) return;
+  const i = Math.max(0, Math.min(slots.length - 1, k));
+  slots[i].scrollIntoView({ behavior: smooth === false ? 'auto' : 'smooth', inline: 'center', block: 'nearest' });
+}
+
+/** 翻页（逻辑方向，与 RTL 无关）：+1 = 下一屏，-1 = 上一屏；越界则切话 */
+function turnPage(dir){
+  const slots = pageSlots();
+  if(!slots.length) return;
+  const cur = currentSlotIdx();
+  const nxt = cur + dir;
+  if(nxt < 0){ navByZone('prev'); return; }
+  if(nxt >= slots.length){ navByZone('next'); return; }
+  scrollToSlot(nxt);
+  AUTOSCROLL.anchorPos = null;
+  const slot = slots[nxt];
+  const first = slot.classList.contains('spread') ? slot.querySelector('.imgwrap') : slot;
+  const n = figIndexOf(first);
+  if(!isNaN(n)) state.viewPos = n;
+  prefetchAhead(nxt);          // 先把后面几屏铺好，快速连翻不撞空白
+  _lastPrefetchSlot = nxt;
+  showReaderToast('第 ' + ((isNaN(n) ? cur : n) + 1) + ' 张');
+}
+
+/** 关掉连续阅读（翻页模式没有"滚到底"这个触发点） */
+function disableContinuous(){
+  if(!state.continuous) return;
+  state.continuous = false;
+  const area = document.getElementById('readerArea');
+  if(area) area.classList.remove('continuous');
+  if(continuousObserver) continuousObserver.disconnect();
+  const btn = document.getElementById('btnContinuous');
+  if(btn){
+    btn.style.background = 'transparent';
+    btn.style.color = 'var(--mut)';
+    btn.style.borderColor = 'var(--ln)';
+  }
+}
+
+/** 把当前 state 落到 DOM 上（模式类名 / 双页分组 / 宽度模式 / 控件高亮） */
+function applyReadMode(){
+  const area = document.getElementById('readerArea');
+  if(!area) return;
+  const paged = state.readMode === 'page';
+  area.classList.toggle('paged', paged);
+  area.classList.toggle('rtl', paged && state.readDir === 'rtl');
+  document.body.classList.toggle('reader-paged', paged);
+  if(paged){
+    stopAutoScroll();     // 自动滚动是竖向像素推进模型，翻页模式下没有意义
+    disableContinuous();
+    regroupSpreads();
+    /* 竖向模式会给"比容器窄的小图"加 inline max-width（方案 C，避免插值放大糊），
+       翻页模式下这条 inline 样式会让图缩成一小块浮在屏幕中间，必须清掉。
+       翻页模式恒为"整屏 contain"，本来也不需要它。 */
+    area.querySelectorAll('.imgwrap img, .imgwrap canvas').forEach(el=>{
+      el.style.maxWidth = ''; el.style.marginLeft = ''; el.style.marginRight = '';
+    });
+    _lastPrefetchSlot = -1;
+    requestAnimationFrame(()=>prefetchAhead(Math.max(0, currentSlotIdx())));
+  }else{
+    ungroupSpreads();
+    _lastPrefetchSlot = -1;
+  }
+  applyImgWidth();        // 翻页模式会剥掉 w-* 宽度类，切回滚动时要还原
+  syncReadModeUI();
+}
+
+function syncReadModeUI(){
+  const paged = state.readMode === 'page';
+  const on = (id, v)=>{ const b = document.getElementById(id); if(b) b.classList.toggle('active', !!v); };
+  on('rmode-scroll', !paged);
+  on('rmode-page', paged);
+  on('rdir-ltr', paged && state.readDir === 'ltr');
+  on('rdir-rtl', paged && state.readDir === 'rtl');
+  on('rspread-1', paged && state.spread === 1);
+  on('rspread-2', paged && state.spread === 2);
+  // 方向/页数只在翻页模式下有意义，滚动模式下置灰（点了没反应会以为是 bug）
+  ['rdir-ltr','rdir-rtl','rspread-1','rspread-2'].forEach(id=>{
+    const b = document.getElementById(id);
+    if(!b) return;
+    b.disabled = !paged;
+    b.title = paged ? '' : '先切到「左右翻页」';
+  });
+  const hint = document.getElementById('readerHint');
+  if(hint) hint.textContent = paged
+    ? '键盘: ←→ 翻页（RTL 时方向相反）· 空格 下一页 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 左/右=翻页 中=放大 · 右键菜单'
+    : '键盘: ←→/J/K 切换话 · 空格 翻屏 · V 原始尺寸 · Esc 返回详情 ｜ 鼠标: 单击 上=上一张 中=放大 下=下一张(末张则下一话) · 右键菜单';
+}
+
+/** 当前屏第一张已渲染图片的宽高比（w/h）。拿不到返回 null。
+ *  用途：翻页模式对条漫不友好——实测本源的图是 720×4200 的长条（比例 0.17），
+ *  整屏 contain 后只剩 154×900，屏幕上一条细缝。这不是 bug，是"整页显示"对长条图
+ *  的必然结果，所以要主动提示用户改用竖向滚动，而不是让他以为功能坏了。 */
+function currentPageRatio(){
+  const slots = pageSlots();
+  if(!slots.length) return null;
+  const k = Math.max(0, currentSlotIdx());
+  const slot = slots[k] || slots[0];
+  const el = slot.querySelector('canvas') || slot.querySelector('img');
+  if(!el) return null;
+  const w = el.width || el.naturalWidth, h = el.height || el.naturalHeight;
+  if(!w || !h) return null;
+  return w / h;
+}
+
+function setReadMode(mode){
+  const m = (mode === 'page') ? 'page' : 'scroll';
+  if(m === state.readMode){ showReaderToast(m === 'page' ? '已是左右翻页' : '已是竖向滚动'); return; }
+  state.readMode = m;
+  applyReadMode();
+  saveReaderPrefs();
+  // 切模式后位置会"跳"，按当前页重新对齐一次，避免回到第 1 张
+  if(state.view === 'reader') requestAnimationFrame(()=>scrollToImg(state.viewPos || 0));
+  if(m === 'page'){
+    const ratio = currentPageRatio();
+    const tall = ratio !== null && ratio < 0.45;
+    showReaderToast(tall ? '本话是条漫长图，翻页后会很窄，建议用竖向滚动' : ('左右翻页' + (state.readDir === 'rtl' ? '（右→左）' : '')));
+  }else{
+    showReaderToast('竖向滚动');
+  }
+}
+function setReadDir(dir){
+  state.readDir = (dir === 'rtl') ? 'rtl' : 'ltr';
+  applyReadMode();
+  saveReaderPrefs();
+  if(state.view === 'reader' && state.readMode === 'page') requestAnimationFrame(()=>scrollToImg(state.viewPos || 0));
+  showReaderToast(state.readDir === 'rtl' ? '右 → 左（日漫）' : '左 → 右');
+}
+function setSpread(n){
+  state.spread = (Number(n) === 2) ? 2 : 1;
+  applyReadMode();
+  saveReaderPrefs();
+  if(state.view === 'reader' && state.readMode === 'page') requestAnimationFrame(()=>scrollToImg(state.viewPos || 0));
+  if(state.spread === 2){
+    const ratio = currentPageRatio();
+    showReaderToast((ratio !== null && ratio < 0.45) ? '本话是条漫长图，双页会挤成细条，建议用竖向滚动' : '双页');
+  }else{
+    showReaderToast('单页');
+  }
 }
 
 /** 亮度：作用于 #readerArea 的 CSS filter */
@@ -2230,6 +2698,151 @@ function renderHistory(){
 }
 
 /* ============================================================
+ * 十五、书架 + 追更
+ * ------------------------------------------------------------
+ * 全部落 localStorage（Vercel 函数无状态，没有服务端存储）：
+ *   manga_shelf = [{ id, src, title, cover, author, chapCount, lastChap, addedAt, seenAt }]
+ *
+ * 追更逻辑：`chapCount` = 加入书架时该作品的章节总数；
+ *   角标数 = 当前总数 − chapCount。
+ *   只有用户**真正点开某一话阅读**时，才把 chapCount 刷成当前总数（视为已读），
+ *   所以红点会一直留到他读过为止 —— 这是阅读类 App 的通行做法，
+ *   不要在打开详情页时就清掉，否则「有新话」永远看不到。
+ * ============================================================ */
+const SHELF_KEY = 'manga_shelf';
+const SHELF_MAX = 200;
+
+function shelfAll(){
+  try{ const a = JSON.parse(localStorage.getItem(SHELF_KEY)||'[]'); return Array.isArray(a) ? a : []; }
+  catch(e){ return []; }
+}
+function shelfSave(list){ localStorage.setItem(SHELF_KEY, JSON.stringify(list.slice(0, SHELF_MAX))); }
+function shelfFind(id, src){
+  src = src || SRC_KEY;
+  return shelfAll().find(x => String(x.id)===String(id) && recSrc(x)===src) || null;
+}
+function shelfHas(id){ return !!shelfFind(id); }
+
+function toggleShelf(){
+  const c = state.comic;
+  if(!c || !c.id) return;
+  const list = shelfAll();
+  const i = list.findIndex(x => String(x.id)===String(c.id) && recSrc(x)===SRC_KEY);
+  if(i >= 0){
+    list.splice(i, 1);
+    delete state.shelfUpdates[c.id];
+    showReaderToast('已移出书架', true);
+  }else{
+    list.unshift({
+      id: String(c.id), src: SRC_KEY,
+      title: c.title || '', cover: c.cover || c.pic || '', author: c.author || '',
+      chapCount: Array.isArray(state.chapters) ? state.chapters.length : 0,
+      lastChap: 0, addedAt: Date.now(), seenAt: 0
+    });
+    showReaderToast('已加入书架', true);
+  }
+  shelfSave(list);
+  renderDetailActions();
+  updateShelfDot();
+}
+
+function renderDetailActions(){
+  const el = document.getElementById('detailActions');
+  if(!el) return;
+  if(!state.comic || !state.comic.id){ el.innerHTML = ''; return; }
+  const on = shelfHas(state.comic.id);
+  el.innerHTML = '<button class="' + (on ? 'on' : '') + '" onclick="toggleShelf()">' +
+    (on ? '✓ 已在书架（点击移出）' : '+ 加入书架') + '</button>';
+}
+
+/** 导航「书架」上的小红点：当前源有几本有更新 */
+function updateShelfDot(){
+  const n = shelfAll().filter(x => recSrc(x)===SRC_KEY && (state.shelfUpdates[x.id]||0) > 0).length;
+  const dot = document.getElementById('shelfDot');
+  if(dot) dot.style.display = n > 0 ? 'inline-block' : 'none';
+}
+
+/** 真正读某一话时，把该作品标为「已读到当前话数」，清掉追更角标 */
+function markShelfRead(){
+  const c = state.comic;
+  if(!c || !c.id) return;
+  const list = shelfAll();
+  const i = list.findIndex(x => String(x.id)===String(c.id) && recSrc(x)===SRC_KEY);
+  if(i < 0) return;
+  list[i].chapCount = state.chapters.length;
+  list[i].lastChap = state.chapIdx + 1;
+  list[i].seenAt = Date.now();
+  shelfSave(list);
+  state.shelfUpdates[c.id] = 0;
+  updateShelfDot();
+}
+
+function shelfCardHtml(x){
+  const up = state.shelfUpdates[x.id] || 0;
+  const meta = x.lastChap ? ('读到第 ' + x.lastChap + ' 话') : (x.chapCount ? ('共 ' + x.chapCount + ' 话') : '');
+  return '<div class="card" onclick="openDetail(' + x.id + ')">' +
+    (up > 0 ? '<span class="shelf-badge">+' + up + '</span>' : '') +
+    '<img src="' + toProxyPath(x.cover||'') + '" alt="' + esc(x.title||'') + '" loading="lazy"' +
+      ' onerror="this.style.visibility=\'hidden\'">' +
+    '<div class="info"><div class="title">' + esc(x.title||'') + '</div>' +
+    '<div class="meta">' + esc(meta) + '</div></div></div>';
+}
+
+function renderShelf(){
+  const grid = document.getElementById('shelfGrid');
+  const bar = document.getElementById('shelfBar');
+  if(!grid) return;
+  const list = shelfAll().filter(x => recSrc(x)===SRC_KEY);
+  const ups = list.filter(x => (state.shelfUpdates[x.id]||0) > 0).length;
+  if(bar){
+    bar.innerHTML = '<div class="cat-row">' +
+        '<button onclick="refreshShelf(true)">🔄 检查更新</button>' +
+        '<button ' + (ups ? 'class="active"' : 'disabled style="opacity:.5;cursor:default"') + '>' +
+          (ups ? ups + ' 本有更新' : '暂无更新') + '</button>' +
+      '</div>' +
+      '<div class="shelf-tip">书架按书源隔离（当前：' + esc(BOOK_SOURCES.name||'') + '）· 只存在本机浏览器，换设备不同步</div>';
+  }
+  if(!list.length){
+    grid.innerHTML = '<div class="empty-state"><div class="icon">📚</div>书架是空的' +
+      '<br><span style="font-size:12px">在作品详情页点「+ 加入书架」</span></div>';
+    updateShelfDot();
+    return;
+  }
+  grid.innerHTML = list.map(shelfCardHtml).join('');
+  updateShelfDot();
+}
+
+/** 检查更新：并发 3 拉章节数，与加入时的 chapCount 比对。
+ *  上游没有批量接口，N 本就是 N 次请求 —— 靠代理端 20s 缓存 + 这里限流兜住。
+ *  单本失败不影响其他（catch 里静默跳过）。 */
+let shelfRefreshing = false;
+async function refreshShelf(manual){
+  if(shelfRefreshing) return;
+  const list = shelfAll().filter(x => recSrc(x)===SRC_KEY);
+  if(!list.length){ renderShelf(); return; }
+  shelfRefreshing = true;
+  if(manual) showReaderToast('正在检查 ' + list.length + ' 本…', true);
+  const queue = list.slice();
+  const worker = async () => {
+    while(queue.length){
+      const it = queue.shift();
+      try{
+        const d = await apiGet(frontPathOf('chapters','/api/comic/') + it.id + '/chapters');
+        const n = (d && Array.isArray(d.list)) ? d.list.length : 0;
+        if(n) state.shelfUpdates[it.id] = Math.max(0, n - (Number(it.chapCount) || 0));
+      }catch(e){ /* 单本失败静默 */ }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  shelfRefreshing = false;
+  renderShelf();
+  if(manual){
+    const ups = list.filter(x => (state.shelfUpdates[x.id]||0) > 0).length;
+    showReaderToast('检查完成：' + (ups ? ups + ' 本有更新' : '暂无更新'), true);
+  }
+}
+
+/* ============================================================
  * 十六、工具
  * ============================================================ */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -2260,8 +2873,16 @@ document.addEventListener('keydown', e=>{
 
   switch(e.key){
     case 'Escape': backToDetail(); break;   // 无浮层/放大时的 Esc = 返回详情页（Pixiv ③）
-    case 'ArrowRight': nextChapter(); break;
-    case 'ArrowLeft':  prevChapter(); break;
+    /* 翻页模式：方向键跟着"阅读方向"走 —— RTL 时 ← 才是"往前读"。
+       竖向滚动模式保持原语义（←→ 切话），因为条漫没有左右概念。 */
+    case 'ArrowRight':
+      if(state.readMode === 'page') turnPage(state.readDir === 'rtl' ? -1 : 1);
+      else nextChapter();
+      break;
+    case 'ArrowLeft':
+      if(state.readMode === 'page') turnPage(state.readDir === 'rtl' ? 1 : -1);
+      else prevChapter();
+      break;
     case 'k': case 'K': prevChapter(); break;
     case 'j': case 'J': nextChapter(); break;
     case 'v': case 'V':                      // Pixiv: V 切换原始尺寸
@@ -2269,25 +2890,30 @@ document.addEventListener('keydown', e=>{
       setImgWidth(state.imgWidth === 'orig' ? 'fit' : 'orig');
       showReaderToast(state.imgWidth === 'orig' ? '原始尺寸' : '适应宽度');
       break;
-    case ' ': case 'Spacebar':        // 空格：翻一屏
+    case ' ': case 'Spacebar':        // 空格：翻一屏 / 翻一页
       e.preventDefault();
-      window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
+      if(state.readMode === 'page') turnPage(1);
+      else window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
       break;
     case 'PageDown':
       e.preventDefault();
-      window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
+      if(state.readMode === 'page') turnPage(1);
+      else window.scrollBy({top: window.innerHeight * 0.9, behavior:'smooth'});
       break;
     case 'PageUp':
       e.preventDefault();
-      window.scrollBy({top: -window.innerHeight * 0.9, behavior:'smooth'});
+      if(state.readMode === 'page') turnPage(-1);
+      else window.scrollBy({top: -window.innerHeight * 0.9, behavior:'smooth'});
       break;
     case 'ArrowDown':
       e.preventDefault();
-      window.scrollBy({top: 120, behavior:'smooth'});
+      if(state.readMode === 'page') turnPage(1);
+      else window.scrollBy({top: 120, behavior:'smooth'});
       break;
     case 'ArrowUp':
       e.preventDefault();
-      window.scrollBy({top: -120, behavior:'smooth'});
+      if(state.readMode === 'page') turnPage(-1);
+      else window.scrollBy({top: -120, behavior:'smooth'});
       break;
     case 'Home':
       e.preventDefault(); goTop(); break;
@@ -2304,6 +2930,9 @@ document.addEventListener('keydown', e=>{
   await loadSourceList();
   await loadRules();
   navigate('home');
+  /* 后台检查书架更新：让导航上的小红点不用先点进书架就能出现。
+   * 限流 3 + 代理端 20s 缓存，书架为空时直接返回，不发请求。 */
+  refreshShelf(false);
 })();
 
 /* 用户主动滚动（滚轮/触摸）→ 停止自动滚动，避免抢控制权
