@@ -399,6 +399,26 @@ Pixiv 官方原文（pixiv.help）：
 - **未实现（有意放弃）**：`Z` 缩略图预览、`L` 喜欢、`B` 收藏；源站也没有点赞/收藏数据。
   （阅读方向切换已实现，见下面「阅读模式：竖向滚动 / 左右翻页」。）
 
+#### 页间距（条漫拼接缝）—— 别把它当成反混淆 bug
+
+`.imgwrap` 原先写死 `margin-bottom:8px` + `background:#111` + `border-radius:4px`。后果：
+
+- 条漫相邻两张之间露出 **body 背景 `#1a1a2e`**，在画面上就是一条纯色黑横线。
+  实测用户截图中该行 `RGB=(26,26,46)`、整行 `rRange=0`（像素完全一致），与 `--bg` 分毫不差，
+  这就是判据——**任何解码/反混淆错误都不可能产生整行零方差的纯色行**。
+- 图片比容器窄时（`applyNaturalWidthLimit` 居中），`#111` 在两侧露出两块深色竖条 + 4px 圆角，
+  看起来像"图片被框住了"。
+
+现在统一走 CSS 变量：`#readerArea{--img-gap:0px}`，`.imgwrap{margin-bottom:var(--img-gap);
+background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 写变量。
+默认 0 = 无缝；设置面板可选 0/4/8px。
+
+注意：
+- 不要再给 `#readerArea.continuous .imgwrap` 加 `margin-bottom`——它的 id+class+class 特异度会
+  覆盖掉变量，导致「页间距」设置在连续阅读下永远失效（旧的 4px 规则已删）。
+- `.imgwrap` 背景改透明后，loading 骨架仍靠 `.imgwrap.loading` 自己的渐变，不要指望父级底色。
+- 翻页模式另有一条 `#readerArea.paged > .imgwrap{background:#0a0a0a}`，那是刻意的整屏黑底，别删。
+
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
 阅读器里有**两条独立的栏**，都吸附、都能自动隐藏：
