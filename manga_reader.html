@@ -186,9 +186,14 @@ body.reader-wide .container{max-width:none;padding:0}
 /* 阅读器轻提示 */
 .reader-toast{position:fixed;left:50%;bottom:32px;transform:translate(-50%,12px);background:rgba(0,0,0,.82);color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:300;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
 .reader-toast.on{opacity:1;transform:translate(-50%,0)}
-/* 双击放大：图片铺满视口、可滚动查看细节 */
-.imgwrap.zoomed{position:fixed;inset:0;z-index:250;background:rgba(0,0,0,.97);margin:0;border-radius:0;overflow:auto;cursor:zoom-out;min-height:0}
-.imgwrap.zoomed img{width:auto;max-width:100%;height:auto;margin:0 auto;display:block;object-fit:contain;background:transparent}
+/* 看图模式（lightbox）：图片铺满视口、可滚动查看细节。
+   max-width 必须是 none —— 之前是 100%，一放大就被按回视口宽，缩放永远生效不了。
+   canvas 也要写：18comic 的图解扰后 img 已被换成 canvas，只写 img 那条规则对不上。 */
+.imgwrap.zoomed{position:fixed;inset:0;z-index:250;background:rgba(0,0,0,.97);margin:0;border-radius:0;overflow:auto;cursor:zoom-out;min-height:0;-webkit-user-select:none;user-select:none;overscroll-behavior:contain}
+.imgwrap.zoomed img,.imgwrap.zoomed canvas{width:auto;max-width:none;height:auto;margin:0 auto;display:block;object-fit:contain;background:transparent}
+/* 放大超过 1× 时才能拖拽平移；cursor 给出"能抓"的暗示 */
+.imgwrap.zoomed.zoomed-in{cursor:grab}
+.imgwrap.zoomed.zoomed-in.dragging{cursor:grabbing}
 body.zoomed{overflow:hidden}
 /* ---------- 翻页模式（page）：整屏横向分页，支持 RTL / 双页 ----------
    与竖向滚动**共用同一份 DOM**（figure.imgwrap），只把容器换成横向 scroll-snap 分页器。
@@ -2025,18 +2030,89 @@ function showReaderToast(msg, force){
 }
 
 /* ============================================================
- * 十二、鼠标左键/右键交互（参考 Pixiv）
- *   双击图片 → 放大/复原；单击左/右区域 → 上一话/下一话；右键 → 快捷菜单
+ * 十二、鼠标/触摸交互（参考 Pixiv）
+ *   看图模式：单击退出（延时 220ms 与双击区分）/ 双击 1×2×4× 循环 /
+ *             Ctrl+滚轮无级缩放 / 拖拽平移 / 双指捏合
+ *   阅读中：单击上 1/3 上一张、中央 1/3 进看图、下 1/3 下一张；右键 → 快捷菜单
  *   纯前端，不涉及代理层
  * ============================================================ */
 const MOUSE_UI = {
   zoomed: null,      // 当前放大的 .imgwrap
   zoomOrigin: 0,     // 放大前滚动位置
-  bound: false       // 事件是否已绑定
+  bound: false,      // 事件是否已绑定
+  scale: 1,          // 当前缩放倍率（相对"适配宽度"），1 = 不放大
+  saved: null,       // 放大前元素的 inline 样式（退出时还原）
+  pan: null,         // 拖拽平移中：{x,y,sl,st,moved}
+  pinch: null,       // 双指捏合中：{d,scale}
+  clickTimer: null,  // 单击退出的延时句柄（要和双击放大区分开）
+  lastDrag: 0        // 上次拖拽结束的时间戳（拖拽本身会产生一个 click，得避开）
 };
+const ZOOM_MAX = 4;                 // 源图只有 720px，再大全是插值，没有意义
+const ZOOM_STEPS = [1, 2, 4];        // 双击在这几档之间循环
 
-/* ---------- 双击放大 / 复原 ---------- */
+/* ---------- 看图模式：缩放 / 平移 ---------- */
 function isZoomed(){ return !!MOUSE_UI.zoomed; }
+function zoomWrap(){ return MOUSE_UI.zoomed; }
+/** 取放大态里的图片元素。18comic 的解扰图是 canvas，不能只查 img。 */
+function zoomEl(){
+  const w = MOUSE_UI.zoomed;
+  if(!w) return null;
+  return w.querySelector('img.cimg') || w.querySelector('canvas') || w.firstElementChild;
+}
+/** 适配宽度：不超过原始尺寸，也不超过视口 —— 和普通模式一致，保证"放大"至少是全屏 */
+function zoomBaseW(){
+  const el = zoomEl(), w = zoomWrap();
+  if(!el || !w) return 0;
+  return Math.max(1, Math.min(el.naturalWidth || el.width, w.clientWidth));
+}
+/** 应用缩放。anchor 是"缩放前后保持不动"的那个点（视口坐标）。
+ *  注意：即使倍率没变也要落一次 width —— CSS 里 max-width 已是 none，
+ *  不显式给宽度的话 `width:auto` 会取原始宽度，窄屏（如 390px 手机）上图会溢出屏幕。 */
+function applyZoom(scale, anchor){
+  const w = zoomWrap(), el = zoomEl();
+  if(!w || !el) return;
+  const old = MOUSE_UI.scale;
+  scale = Math.max(1, Math.min(ZOOM_MAX, scale));
+  // 先把锚点换算成"内容坐标系"（除以旧倍率）
+  let fx = 0, fy = 0;
+  if(anchor){
+    const r0 = w.getBoundingClientRect();
+    fx = (w.scrollLeft + anchor.x - r0.x - el.offsetLeft) / old;
+    fy = (w.scrollTop  + anchor.y - r0.y - el.offsetTop)  / old;
+  }
+  MOUSE_UI.scale = scale;
+  el.style.width = Math.round(zoomBaseW() * scale) + 'px';
+  if(anchor){
+    const r1 = w.getBoundingClientRect();
+    w.scrollLeft = Math.round(fx * scale + el.offsetLeft - (anchor.x - r1.x));
+    w.scrollTop  = Math.round(fy * scale + el.offsetTop  - (anchor.y - r1.y));
+  }
+  w.classList.toggle('zoomed-in', scale > 1.001);
+}
+/** 进入放大：把 applyNaturalWidthLimit 写下的 inline max-width 收掉，否则永远压在原宽度 */
+function zoomEnter(){
+  const el = zoomEl(); if(!el) return;
+  MOUSE_UI.saved = { maxWidth: el.style.maxWidth, ml: el.style.marginLeft, mr: el.style.marginRight, w: el.style.width };
+  el.style.maxWidth = 'none';
+  el.style.marginLeft = 'auto';
+  el.style.marginRight = 'auto';
+}
+function zoomExit(){
+  const el = zoomEl();
+  if(el && MOUSE_UI.saved){
+    el.style.maxWidth  = MOUSE_UI.saved.maxWidth;
+    el.style.marginLeft = MOUSE_UI.saved.ml;
+    el.style.marginRight = MOUSE_UI.saved.mr;
+    el.style.width     = MOUSE_UI.saved.w;
+  }
+  MOUSE_UI.saved = null;
+  MOUSE_UI.scale = 1;
+  MOUSE_UI.pan = null;
+  MOUSE_UI.pinch = null;
+  if(MOUSE_UI.clickTimer){ clearTimeout(MOUSE_UI.clickTimer); MOUSE_UI.clickTimer = null; }
+  const w = MOUSE_UI.zoomed;
+  if(w){ w.classList.remove('zoomed-in'); w.classList.remove('dragging'); }
+}
 
 function toggleZoom(wrap){
   if(!wrap || wrap.classList.contains('failed')) return;
@@ -2045,14 +2121,24 @@ function toggleZoom(wrap){
   MOUSE_UI.zoomed = wrap;
   wrap.classList.add('zoomed');
   document.body.classList.add('zoomed');
+  zoomEnter();
+  applyZoom(1);          // 落到适配宽度（不放大，只全屏）
 }
 function unzoomImage(){
   const w = MOUSE_UI.zoomed;
   if(!w) return;
+  zoomExit();
   w.classList.remove('zoomed');
   document.body.classList.remove('zoomed');
   MOUSE_UI.zoomed = null;
   window.scrollTo(0, MOUSE_UI.zoomOrigin);
+}
+/** 双击：在 1× / 2× / 4× 之间循环，以鼠标位置为锚点 */
+function zoomStep(anchor){
+  if(!isZoomed()) return;
+  const i = ZOOM_STEPS.indexOf(MOUSE_UI.scale);
+  const next = ZOOM_STEPS[(i < 0 ? 0 : i + 1) % ZOOM_STEPS.length];
+  applyZoom(next, anchor);
 }
 
 /* ---------- 单击分区：上=上一张 / 中=放大切换 / 下=下一张（Pixiv 竖读模型） ----------
@@ -2188,6 +2274,8 @@ function copyCurrentImage(){
 /* ---------- 离开阅读器时复位鼠标交互状态 ---------- */
 function resetReaderMouseUI(){
   closeCtxMenu();
+  if(MOUSE_UI.clickTimer){ clearTimeout(MOUSE_UI.clickTimer); MOUSE_UI.clickTimer = null; }
+  MOUSE_UI.pan = null;
   if(isZoomed()) unzoomImage();
 }
 
@@ -2203,15 +2291,96 @@ function bindReaderMouseUI(){
        中央 1/3 → 放大切换
        下 1/3 → 下一张切图（本章最后一张则下一话）
      放大态下任意单击 = 复原。 */
+  /* 单击分区（Pixiv 竖读模型）：
+       上 1/3 → 上一张切图（本章第一张则上一话）
+       中央 1/3 → 放大切换
+       下 1/3 → 下一张切图（本章最后一张则下一话）
+     放大态下单击 = 复原。
+     但**要延时 220ms**：否则双击放大的第一下就会把图关掉，双击永远生效不了。
+     延时期间来了第二下 → 交给 dblclick 处理，取消关闭。 */
   area.addEventListener('click', e=>{
     if(state.view !== 'reader') return;
     if(e.button !== 0) return;
-    if(isZoomed()){ unzoomImage(); return; }
+    if(MOUSE_UI.lastDrag && Date.now() - MOUSE_UI.lastDrag < 400) return;   // 刚拖拽完，别当单击
+    if(isZoomed()){
+      if(MOUSE_UI.clickTimer) return;                 // 第二下 → 让位给 dblclick
+      MOUSE_UI.clickTimer = setTimeout(()=>{
+        MOUSE_UI.clickTimer = null;
+        if(isZoomed()) unzoomImage();
+      }, 220);
+      return;
+    }
     const hit = clickZoneAt(e.clientX, e.clientY);
     if(!hit) return;
     if(hit.zone === 'center'){ toggleZoom(hit.wrap); return; }
     scrollToAdjacentImage(hit.zone === 'next' ? 1 : -1);
   });
+
+  /* 双击（仅在放大态）：1× → 2× → 4× → 1×，以鼠标位置为锚点 */
+  area.addEventListener('dblclick', e=>{
+    if(state.view !== 'reader' || !isZoomed()) return;
+    e.preventDefault();
+    if(MOUSE_UI.clickTimer){ clearTimeout(MOUSE_UI.clickTimer); MOUSE_UI.clickTimer = null; }
+    zoomStep({x: e.clientX, y: e.clientY});
+  });
+
+  /* Ctrl/⌘ + 滚轮 = 无级缩放。普通滚轮不拦——图有 4200px 高，滚轮是主要的阅读方式。 */
+  area.addEventListener('wheel', e=>{
+    if(state.view !== 'reader' || !isZoomed()) return;
+    if(!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const k = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    applyZoom(MOUSE_UI.scale * k, {x: e.clientX, y: e.clientY});
+  }, {passive:false});
+
+  /* 拖拽平移：只在放大超过 1× 时抓，否则会和原生滚动打架 */
+  area.addEventListener('mousedown', e=>{
+    if(state.view !== 'reader' || !isZoomed() || e.button !== 0) return;
+    if(MOUSE_UI.scale <= 1.001) return;
+    const w = zoomWrap();
+    MOUSE_UI.pan = {x: e.clientX, y: e.clientY, sl: w.scrollLeft, st: w.scrollTop, moved: 0};
+    w.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e=>{
+    const pan = MOUSE_UI.pan;
+    if(!pan) return;
+    const w = zoomWrap(); if(!w) return;
+    const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+    pan.moved = Math.max(pan.moved, Math.abs(dx) + Math.abs(dy));
+    w.scrollLeft = pan.sl - dx;
+    w.scrollTop  = pan.st  - dy;
+  });
+  window.addEventListener('mouseup', ()=>{
+    const pan = MOUSE_UI.pan;
+    if(!pan) return;
+    MOUSE_UI.pan = null;
+    const w = zoomWrap();
+    if(w) w.classList.remove('dragging');
+    // 移动超过 6px 视为拖拽。注意：mousedown+mouseup 浏览器自己就会补一个 click，
+    // 用布尔标记会被这个 click 提前吃掉，所以记时间戳，click 里按 400ms 窗口避开。
+    if(pan.moved > 6) MOUSE_UI.lastDrag = Date.now();
+  });
+
+  /* 双指捏合缩放（移动端）。单指照样走原生滚动，不拦。 */
+  let touchD = 0;
+  area.addEventListener('touchstart', e=>{
+    if(state.view !== 'reader' || !isZoomed()) return;
+    if(e.touches.length !== 2) return;
+    touchD = Math.abs(e.touches[0].clientX - e.touches[1].clientX) +
+             Math.abs(e.touches[0].clientY - e.touches[1].clientY);
+    MOUSE_UI.pinch = {d: touchD, scale: MOUSE_UI.scale};
+  }, {passive:true});
+  area.addEventListener('touchmove', e=>{
+    if(!MOUSE_UI.pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    const d = Math.abs(e.touches[0].clientX - e.touches[1].clientX) +
+              Math.abs(e.touches[0].clientY - e.touches[1].clientY);
+    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    applyZoom(MOUSE_UI.pinch.scale * (d / Math.max(1, MOUSE_UI.pinch.d)), {x: cx, y: cy});
+  }, {passive:false});
+  area.addEventListener('touchend', ()=>{ MOUSE_UI.pinch = null; }, {passive:true});
 
   /* 翻页模式的滚动发生在 #readerArea 内部（它是 overflow-x:auto 的分页器），
      不会冒泡到 window 的 scroll 事件，进度/位置必须单独监听，否则顶栏一直停在第 1 页。 */
