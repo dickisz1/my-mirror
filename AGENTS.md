@@ -454,43 +454,30 @@ background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 
 
 所以别加 `image-rendering`——没有收益，`crisp-edges` 反而更差。
 
-真正能提升的只剩客户端超分。已实现，见下节。
+真正能提升的只剩客户端超分。**试过并已下掉**，记录见下节，别再照着重做一遍。
 
-#### AI 超分（Anime4K Upscale_CNN_x2_S，WebGL2）
+#### AI 超分：试过，已下掉（2026-10-21）
 
-设置面板「AI 超分：关 / 2×」，默认关。核心约束是**显存**：
+实现过完整的 Anime4K Upscale_CNN_x2_S 管线（WebGL2 + `RGBA16F` 中间层 + 分块渲染 + LRU 2 张），
+着色器 GLSL 从 npm `anime4k.js@1.1.3` 的 tarball 里正则提取后内联进单文件。
+客观指标确实好：对 1440px 原图取 PSNR，浏览器双线性 25.99 dB → Anime4K **35.51 dB**；
+拉普拉斯锐度 19.22 → 33.47（真图 36.85）。
 
-- 720×4200 超分到 1440×8400 = 12.1M 像素，**一张的 RGBA 位图 48MB**。一话 125 张全量 = 6GB，必崩。
-  所以：`A4K_MAX = 2`（LRU，翻走就 `replaceWith(orig)` 换回原图并 `width=1` 释放位图）；
-  观察器 `rootMargin:'100% 0px'`，只对"视口上下各一屏"内的图入队；队列串行 + 块间 `await setTimeout(0)` 让出主线程。
-- **中间层必须用 `RGBA16F`**（`EXT_color_buffer_half_float` / `EXT_color_buffer_float`）。
-  CNN 权重有负项，8 位整数纹理会把负值截成 0，结果全错。拿不到扩展时 `a4kInit()` 返回 false，开关自动弹回关。
-- **分块**：`MAX_TEXTURE_SIZE` 在部分机器上是 4096，而 2×4200=8400 本身就超了。
-  按源图高度切块，块内 `PAD=4` 重叠（CNN 3 层 3×3，感受野半径 3，留 1px 余量），
-  输出时只取中间可用部分，`drawImage` 1:1 贴进目标画布。
-- **不要翻转 Y**：整条链路按"纹素 0 = 图像第一行"走，最后一步才用翻 Y 的顶点着色器
-  （`A4K_VS_FLIP`，`gl_Position = vec4(clipSpace * vec2(1,-1), ...)`）。
-  上游 anime4k.js 也是这么干的（见 `dist/glsl/passthrough.cjs` 的 `flip` 顶点着色器）。
-  在 `texImage2D` 上加 `UNPACK_FLIP_Y_WEBGL` 会让卷积核垂直镜像，等于换了个滤波器。
-- 着色器来源：npm `anime4k.js@1.1.3` tarball → `dist/glsl/Upscale/Anime4K_Upscale_CNN_x2_S.cjs`，
-  用正则抠 `const fragment_N_shader = \`...\`` 的字符串，19KB 全量内联进单文件（无额外请求）。
-  注意：该 `.cjs` 是 43KB，但其中 24KB 是驱动类的样板代码，实际 GLSL 只有 19KB。
+**下掉的原因**（用户判定"收益不高"）：
+- 收益只发生在**设备像素**层。CSS 宽 720px 在 DPR=2 的屏幕上占 1520 个设备像素，
+  原本只能把 720 个源像素双线性拉伸过去，超分成 1440 后才接近 1:1。
+  **DPR=1 且不放大时源图已经 1:1 铺满，开不开看不出差别**——这是物理上限，不是实现问题。
+- 代价太大：一张 1440×8400 的位图 **48MB**，一话 125 张全量必崩，
+  所以只能 LRU 2 张 + 按屏按需；720×4200 单张 1.6s（SwiftShader 软件渲染）。
 
-**为什么输出 2 倍却仍限宽回原始 720**：`.imgwrap img, .imgwrap canvas{width:100%}` + 宽高比不变
-→ 高度完全不变 → 换图零布局跳动（实测 beforeH 4200 / afterH 4200）。
-收益发生在**设备像素**层：CSS 宽 720px 在 DPR=2 上占 1520 个设备像素，
-原本只能把 720 个源像素双线性拉伸过去；换成 1440 像素的真图后接近 1:1。
-DPR=1 且不放大时二者等价——这是物理上限，不是没生效。
-
-实测（Chromium + SwiftShader 软件渲染，真 GPU 快一个量级；对 1440px 原图取 PSNR / Laplacian）：
-
-| 方案 | PSNR | 拉普拉斯能量 |
-|---|---|---|
-| 浏览器双线性放大到 2× | 25.99 dB | 19.22 |
-| Anime4K CNN x2 | **35.51 dB** | **33.47** |
-| （参考）原始 1440 真图 | 99 dB | 36.85 |
-
-720×4200 单张 1.6 s（软件渲染）。`w0*h0 > 6e6` 的图直接跳过，避免卡死。
+若将来要重做，这几个坑是已知的（省得再踩）：
+- 中间层必须 `RGBA16F`（`EXT_color_buffer_half_float`）。CNN 权重有负项，
+  8 位整数纹理会把负值截成 0，结果全错。
+- `MAX_TEXTURE_SIZE` 在部分机器上是 4096，而 2×4200=8400 本身就超了 → 必须分块，
+  块内 `PAD=4` 重叠（CNN 3 层 3×3，感受野半径 3），输出只取中间可用部分。
+- **不能给 `texImage2D` 加 `UNPACK_FLIP_Y_WEBGL`**：那会让卷积核垂直镜像，等于换个滤波器。
+  要翻 Y 就在最后一步用翻 Y 的顶点着色器（上游 `dist/glsl/passthrough.cjs` 的 `flip` 顶点着色器）。
+- 43KB 的 `Anime4K_Upscale_CNN_x2_S.cjs` 里只有 **19KB 是 GLSL**，其余是驱动类样板代码。
 
 #### 阅读器双栏（上栏站点导航 + 下栏操作栏）的约定
 
