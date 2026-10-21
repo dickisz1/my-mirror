@@ -646,6 +646,12 @@ background:transparent;border-radius:calc(var(--img-gap)/2)}`，`applyImgGap()` 
 
 ## 禁止事项
 
+- **不给 `#readerArea` 加 `filter` / `transform` / `will-change` / `perspective`**（2026-10-21 踩过）。
+  这些属性都会给后代创建**包含块**，导致 `.imgwrap.zoomed{position:fixed;inset:0}` 不再相对视口定位，
+  而是相对 `#readerArea`（只有 800px 宽）——实测 1440 视口下放大层只有 800px，
+  左右各露出 320px 的 body 底色 `rgb(26,26,46)`，就是用户截图里那两条深色竖带。
+  亮度已经改成挂在图片上：`#readerArea .imgwrap img, #readerArea .imgwrap canvas{filter:brightness(var(--reader-brightness,1))}`
+  （变量仍写在 `#readerArea` 上，自定义属性会继承，JS 不用动）。
 - 不在 `manga_reader.html` 里写网络代理逻辑
 - 不在 `api/proxy.js` 里写前端 UI 渲染
 - 不修改未列出的文件

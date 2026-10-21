@@ -161,8 +161,14 @@ body.reader-wide .container{max-width:none;padding:0}
    正是用户截图里那条横线的高度。改成读变量，和其余模式保持一致。 */
 #readerArea.w-orig .imgwrap{width:fit-content;max-width:none;margin:0 auto var(--img-gap)}
 #readerArea.w-orig .imgwrap img{width:auto;max-width:none}
-/* 亮度：作用于整个阅读区 */
-#readerArea{filter:brightness(var(--reader-brightness,1))}
+/* 亮度：只作用到图片上，**不要挂在 #readerArea 上**。
+   原因：`filter` 只要不是 none，就会给后代创建包含块（containing block）。
+   `.imgwrap.zoomed{position:fixed;inset:0}` 于是相对 #readerArea（只有 800px 宽）
+   而不是视口定位 —— 实测 1440 视口下放大层只有 800px，左右各露出 320px 的
+   body 底色 rgb(26,26,46)，就是用户截图里那两条深色竖带。
+   变量仍写在 #readerArea 上（自定义属性会继承），JS 不用改。 */
+#readerArea .imgwrap img,
+#readerArea .imgwrap canvas{filter:brightness(var(--reader-brightness,1))}
 /* ---- 章节快速跳转浮层 ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;display:none}
 .overlay.on{display:block}
